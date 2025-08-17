@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// Copyright (c) 2024 Ian Philip Eglin
+// Copyright (c) 2025 Ian Philip Eglin
 //! Example implementation showing how to use the CBAA library for elevator dispatch
 //!
 //! This example demonstrates a P2P elevator system where multiple elevator controllers

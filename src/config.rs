@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-// Copyright (c) 2024 Ian Philip Eglin
+// Copyright (c) 2025 Ian Philip Eglin
 //! Configuration structures for auction algorithms
 
 use std::time::Duration;

@@ -6,6 +6,19 @@
 
 Kefli is a Rust implementation of the Consensus-Based Auction Algorithm (CBAA) and Consensus-Based Bundle Algorithm (CBBA) for distributed task allocation. These algorithms are particularly useful in multi-agent systems where autonomous agents need to coordinate and agree on task assignments without centralized control.
 
+## Acknowledgment
+
+The algorithms implemented in this crate were originally developed and published by:
+
+> H.-L. Choi, L. Brunet, and J. P. How,  
+> *Consensus-Based Decentralized Auctions for Robust Task Allocation,*  
+> **IEEE Transactions on Robotics**, vol. 25, no. 4, pp. 912-926, Aug. 2009.  
+> [DOI: 10.1109/TRO.2009.2022423](https://doi.org/10.1109/TRO.2009.2022423) | [IEEE Xplore Link](https://ieeexplore.ieee.org/document/5072249)
+
+This crate is an independent, from-scratch reimplementation of the algorithms in Rust.  
+It does **not** redistribute or copy any of the original article's text, figures, or code; only the algorithmic ideas have been re-expressed.  
+If you use this crate in academic work, please cite the original paper above.
+
 ## Name
 
 The crate is named **Kefli** after the Old Norse word *kefli*, meaning a wooden staff, stick, or cylinder.  

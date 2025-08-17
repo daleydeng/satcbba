@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2024 Ian Philip Eglin
 //! # Kefli - CBAA/CBBA Library for Rust
 //!
 //! Kefli is a Rust implementation of the Consensus-Based Auction Algorithm (CBAA)

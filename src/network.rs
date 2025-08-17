@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2025 Ian Philip Eglin
 //! Network communication abstractions
 
 use crate::error::AuctionError;

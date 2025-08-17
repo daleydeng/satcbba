@@ -22,7 +22,7 @@ If you use this crate in academic work, please cite the original paper above.
 ## Name
 
 The crate is named **Kefli** after the Old Norse word *kefli*, meaning a wooden staff, stick, or cylinder.  
-In medieval Scandinavian law texts, *laga-kefli* referred to a law-staff � a symbol of authority and decision-making.  
+In medieval Scandinavian law texts, *laga-kefli* referred to a law-staff — a symbol of authority and decision-making.  
 
 This is a fitting metaphor for a library that provides consensus-based auction algorithms:  
 just as the *kefli* represented authority and resolution in legal assemblies, the algorithms here  
@@ -35,7 +35,7 @@ serve as the mechanism for reaching agreement and assigning tasks in distributed
 - **Generic Design**: Works with any task and agent types
 - **Configurable**: Flexible cost functions and network topologies
 - **Async-Ready**: Designed to work with async/await patterns
-- **No Dependencies**: Lightweight core with no external dependencies
+- **Lightweight core:** optional dependencies only
 
 ## Installation
 
@@ -185,8 +185,7 @@ impl NetworkHandler<AgentId, TaskType> for MyNetworkHandler {
 
 ## Performance Guarantees
 
-Both algorithms provide theoretical guarantees:
-
+As shown in Choi, Brunet & How (2009), both CBAA and CBBA provide theoretical guarantees:
 - **Convergence**: Finite time to conflict-free assignment
 - **Optimality**: At least 50% optimal solutions
 - **Robustness**: Tolerant to network changes and failures
@@ -207,6 +206,27 @@ Run tests with:
 cargo test                    # Unit tests
 cargo test --test integration # Integration tests
 ```
+
+## License
+
+Dual-licensed under either:
+- **MIT** license (see `LICENSE`), or
+- **Apache-2.0** license (see `LICENSE-APACHE`)
+
+You may choose either license at your option.
+
+## Citation
+
+If you use **Kefli**, please cite this software (see `CITATION.cff`) and the original paper:
+
+Choi, H.-L., Brunet, L., & How, J. P. (2009).
+'Consensus-Based Decentralized Auctions for Robust Task Allocation.'
+*IEEE Transactions on Robotics*, 25(4), 912–926.
+DOI: 10.1109/TRO.2009.2022423
+
+## Notice
+
+See `NOTICE` for attribution details. The NOTICE file is informational and does not modify the license terms.
 
 ## Contributing
 

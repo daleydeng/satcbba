@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2024 Ian Philip Eglin
 //! Core types and traits for the auction algorithms
 
 use std::collections::HashMap;

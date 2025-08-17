@@ -3,6 +3,7 @@
 //! Integration tests for the kefli library
 
 use kefli::*;
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -16,15 +17,49 @@ struct SimpleAgent {
     id: u32,
 }
 
+struct SimpleNetworkHandler {
+    agent_id: SimpleAgent,
+    neighbors: Vec<SimpleAgent>,
+    sent_messages: Vec<ConsensusMessage<SimpleAgent, SimpleTask>>,
+    received_messages: Vec<ConsensusMessage<SimpleAgent, SimpleTask>>,
+}
+
+impl SimpleNetworkHandler {
+    fn new(agent_id: SimpleAgent, neighbors: Vec<SimpleAgent>) -> Self {
+        Self {
+            agent_id,
+            neighbors,
+            sent_messages: Vec::new(),
+            received_messages: Vec::new(),
+        }
+    }
+
+    fn add_received_message(&mut self, message: ConsensusMessage<SimpleAgent, SimpleTask>) {
+        self.received_messages.push(message);
+    }
+}
+
+impl NetworkHandler<SimpleAgent, SimpleTask> for SimpleNetworkHandler {
+    fn send_message(&mut self, message: ConsensusMessage<SimpleAgent, SimpleTask>) -> Result<(), AuctionError> {
+        self.sent_messages.push(message);
+        Ok(())
+    }
+
+    fn receive_messages(&mut self) -> Result<Vec<ConsensusMessage<SimpleAgent, SimpleTask>>, AuctionError> {
+        let messages = self.received_messages.clone();
+        self.received_messages.clear();
+        Ok(messages)
+    }
+
+    fn get_neighbors(&self) -> Vec<SimpleAgent> {
+        self.neighbors.clone()
+    }
+}
+
 struct SimpleCostFunction;
 
 impl CostFunction<SimpleTask, SimpleAgent> for SimpleCostFunction {
-    fn calculate_cost(
-        &self,
-        agent: SimpleAgent,
-        task: &SimpleTask,
-        _context: &AssignmentContext<SimpleTask, SimpleAgent>,
-    ) -> f64 {
+    fn calculate_cost(&self, agent: SimpleAgent, task: &SimpleTask, _context: &AssignmentContext<SimpleTask, SimpleAgent>) -> f64 {
         // Simple cost: agent preference + task priority
         let agent_preference = match agent.id % 3 {
             0 => 10.0,
@@ -88,6 +123,11 @@ fn test_cbba_multi_assignment() {
     let tasks = vec![
         SimpleTask { id: 1, priority: 5 },
         SimpleTask { id: 2, priority: 3 },
+#[test]
+fn test_cbba_multi_assignment() {
+    let tasks = vec![
+        SimpleTask { id: 1, priority: 5 },
+        SimpleTask { id: 2, priority: 3 },
         SimpleTask { id: 3, priority: 4 },
         SimpleTask { id: 4, priority: 2 },
     ];
@@ -113,7 +153,7 @@ fn test_cbba_multi_assignment() {
     assert_eq!(cbba.get_path().len(), added_tasks.len());
 }
 
-#[test]
+#[test] 
 fn test_config_builder() {
     let config = AuctionConfig::cbba(5)
         .with_network_diameter(10)

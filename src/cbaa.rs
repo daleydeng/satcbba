@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2024 Ian Philip Eglin
 //! Consensus-Based Auction Algorithm (CBAA) implementation
 
 use crate::config::AuctionConfig;

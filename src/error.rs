@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2024 Ian Philip Eglin
 //! Error types for auction operations
 
 use std::fmt;

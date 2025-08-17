@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2024 Ian Philip Eglin
 //! Simple example demonstrating basic CBAA usage
 
 use kefli::*;

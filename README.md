@@ -195,13 +195,6 @@ cargo test                    # Unit tests
 cargo test --test integration # Integration tests
 ```
 
-## License
-
-Licensed under either of:
-
-- Apache License, Version 2.0
-- MIT license
-
 ## Contributing
 
 Contributions welcome! Please feel free to submit issues and pull requests.

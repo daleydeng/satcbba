@@ -1,0 +1,37 @@
+data {
+  satellites {
+    mode = "random"
+    random {
+        count = 3
+        speed = 28000
+    }
+  }
+
+  tasks {
+    mode = "random"
+    random {
+        count = 5
+        score_range = List(10.0, 1000.0)
+        duration_range = List(60.0, 600.0)
+    }
+  }
+}
+
+viz {
+  enable_map = true
+  show_task_info = true
+  show_path_time = true
+}
+
+algo {
+  method = "cbba"
+  cbba {
+    max_tasks_per_agent = 0
+  }
+}
+
+output_config {
+  dir = "examples/ex1/results"
+  use_timestamp = true
+  timestamp_fmt = "%Y-%m-%d_%H-%M-%S"
+}

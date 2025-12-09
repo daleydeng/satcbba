@@ -1,0 +1,110 @@
+[
+  {
+    "id": 1,
+    "lat_e6": 37774900,
+    "lon_e6": -122419400,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 2,
+    "lat_e6": 34052200,
+    "lon_e6": -118243700,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 3,
+    "lat_e6": 40712800,
+    "lon_e6": -74006000,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 4,
+    "lat_e6": 51507400,
+    "lon_e6": -127800,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 5,
+    "lat_e6": 35676200,
+    "lon_e6": 139650300,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 6,
+    "lat_e6": -33868800,
+    "lon_e6": 151209300,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 7,
+    "lat_e6": 48856600,
+    "lon_e6": 2352200,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 8,
+    "lat_e6": 39904200,
+    "lon_e6": 116407400,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 9,
+    "lat_e6": 41878100,
+    "lon_e6": -87629800,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 10,
+    "lat_e6": 32715700,
+    "lon_e6": -117161100,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 11,
+    "lat_e6": 55755800,
+    "lon_e6": 37617300,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  },
+  {
+    "id": 12,
+    "lat_e6": -22906800,
+    "lon_e6": -43172900,
+    "decay_rate_per_hr": 0.1,
+    "base_score": 1000.0,
+    "execution_duration_sec": 0.0,
+    "allowed_satellites": null
+  }
+]

@@ -1,37 +1,33 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
-// Copyright (c) 2025 Ian Philip Eglin
 //! Error types for auction operations
 
-use std::fmt;
+use thiserror::Error;
 
 /// Errors that can occur during auction operations
-#[derive(Debug, Clone, PartialEq)]
-pub enum AuctionError {
-    /// Invalid task or agent identifier
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum Error {
+    #[error("Invalid task or agent identifier")]
     InvalidIdentifier,
-    /// Network communication error
+    #[error("Network error: {0}")]
     NetworkError(String),
-    /// Consensus phase failed
+    #[error("Consensus phase failed")]
     ConsensusFailed,
-    /// Invalid bid value
+    #[error("Invalid bid value")]
     InvalidBid,
-    /// Configuration error
+    #[error("Configuration error: {0}")]
     ConfigurationError(String),
-    /// Algorithm state error
+    #[error("State error: {0}")]
     StateError(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+    #[error("Task not found: {0}")]
+    TaskNotFound(String),
+    #[error("Item already exists")]
+    ItemAlreadyExists,
+    #[error("Capacity full")]
+    CapacityFull,
+    #[error("Index out of bounds")]
+    IndexOutOfBounds,
 }
 
-impl fmt::Display for AuctionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AuctionError::InvalidIdentifier => write!(f, "Invalid task or agent identifier"),
-            AuctionError::NetworkError(msg) => write!(f, "Network error: {}", msg),
-            AuctionError::ConsensusFailed => write!(f, "Consensus phase failed"),
-            AuctionError::InvalidBid => write!(f, "Invalid bid value"),
-            AuctionError::ConfigurationError(msg) => write!(f, "Configuration error: {}", msg),
-            AuctionError::StateError(msg) => write!(f, "State error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for AuctionError {}
+/// A specialized Result type for auction operations
+pub type Result<T> = std::result::Result<T, Error>;

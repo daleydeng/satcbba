@@ -1,29 +1,57 @@
 [package]
-name = "kefli"
+name = "cbbadds"
 version = "0.1.0"
-edition = "2021"
-authors = ["Ipeglin"]
-license = "MIT OR Apache-2.0"
+edition = "2024"
 description = "Consensus-Based Auction Algorithm (CBAA) and Consensus-Based Bundle Algorithm (CBBA) implementations for distributed task allocation"
-repository = "https://github.com/ipeglin/kefli"
-keywords = ["consensus", "distributed", "task-allocation", "cbaa", "cbba"]
-categories = ["algorithms", "science::robotics"]
 readme = "README.md"
 
 [dependencies]
-serde = { version = "1.0", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rustdds = "0.11.7"
+bincode = "1.3"
+byteorder = "1.4"
+rand = "0.9"
+plotters = "0.3"
+image = "0.24"
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+thiserror = "2.0.17"
+log = "0.4"
+env_logger = "0.10"
+clap = { version = "4.5.53", features = ["derive"] }
+toml = "0.9.8"
+tracing = "0.1.43"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-appender = "0.2.4"
+tracing-log = "0.2.0"
+chrono = "0.4"
+anyhow = "1.0.100"
+uuid = { version = "1.4", features = ["v4"] }
+
+[build-dependencies]
+glob = "0.3"
+
 
 [dev-dependencies]
 # Dependencies only used for tests and examples
 
-[features]
-default = []
-serde = ["dep:serde"]
+[[example]]
+name = "sim_sat"
+path = "examples/ex1/sim_sat.rs"
 
 [[example]]
-name = "elevator_system"
-path = "examples/elevator_system.rs"
+name = "dds_agent"
+path = "examples/ex2/dds_agent.rs"
 
 [[example]]
-name = "simple_auction"
-path = "examples/simple_auction.rs"
+name = "dds_syncer"
+path = "examples/ex2/dds_syncer.rs"
+
+[[example]]
+name = "dds_manager"
+path = "examples/ex2/dds_manager.rs"
+
+[[example]]
+name = "dds_runner"
+path = "examples/ex2/dds_runner.rs"

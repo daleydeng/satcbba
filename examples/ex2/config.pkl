@@ -1,0 +1,40 @@
+data {
+  satellites {
+    mode = "file"
+    file {
+        path = "examples/data/distance_only/satellites.json"
+    }
+  }
+
+  tasks {
+    mode = "file"
+    file {
+        path = "examples/data/distance_only/tasks.json"
+    }
+  }
+}
+
+dds {
+  domain_id = 0
+  num_agents = 5
+  expected_agents = 5
+}
+
+viz {
+  enable_map = true
+  show_task_info = true
+  show_path_time = true
+}
+
+algo {
+  method = "cbba"
+  cbba {
+    max_tasks_per_agent = 5
+  }
+}
+
+output_config {
+  dir = "examples/ex2/results"
+  use_timestamp = true
+  timestamp_fmt = "%Y-%m-%d_%H-%M-%S"
+}

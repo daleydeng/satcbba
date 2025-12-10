@@ -1,41 +1,33 @@
-use serde::{Deserialize, Serialize};
-use crate::consensus::types::{AgentId, Timestamp};
+use crate::consensus::types::{AddedTasks, AgentId, ReleasedTasks, Timestamp};
 use rustdds::Keyed;
+use serde::{Deserialize, Serialize};
 
 // --- Topic Names ---
-pub const REQUEST_FROM_MANAGER_TOPIC: &str = "RequestFromManager";
-pub const REPLY_TO_MANAGER_TOPIC: &str = "ReplyToManager";
-pub const REQUEST_FROM_SYNCER_TOPIC: &str = "RequestFromSyncer";
-pub const REPLY_TO_SYNCER_TOPIC: &str = "ReplyToSyncer";
+pub const AGENT_COMMAND_TOPIC: &str = "AgentCommand";
+pub const AGENT_REPLY_TOPIC: &str = "AgentReply";
 pub const AGENT_STATE_TOPIC: &str = "AgentState"; // Keyed
 pub const AGENT_STATUS_TOPIC: &str = "AgentStatus"; // Keyed
 pub const AGENT_CONSENSUS_TOPIC: &str = "AgentConsensus"; // Keyed
 pub const LOG_TOPIC: &str = "SystemLog";
+pub const AGENT_EVENT_TOPIC: &str = "AgentEvent";
+pub const SYNCER_EVENT_TOPIC: &str = "SyncerEvent";
 
 // --- Common / Shared Types ---
 
-/// Agent Phase for Requests (from Syncer/Manager)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum AgentRequestPhase {
-    Initializing,
-    BundleConstruction,
-    ConflictResolution,
-}
 
 /// Agent Phase for Replies/Status (from Agent)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AgentPhase {
     #[default]
     Standby,
     Initializing,
     Initialized,
-    BundleConstruction,
-    BundleConstructionComplete(bool), // has_changes
-    ConflictResolution,
-    ConflictResolutionComplete(bool), // has_changes
+    BundlingConstructing,
+    BundlingConstructingComplete(AddedTasks), 
+    ConflictResolving,
+    ConflictResolvingComplete(ReleasedTasks), 
+    Terminating,
 }
-
-
 
 /// Log Message for centralized logging
 /// Direction: All -> Manager
@@ -45,6 +37,31 @@ pub struct LogMessage {
     pub source: String,
     pub level: String, // "INFO", "WARN", "ERROR"
     pub content: String,
+}
+
+/// Generic binary Event wrapper used for arbitrary event payloads
+/// Direction: can be used on AgentEvent or SyncerEvent topics
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Event {
+    /// Human-readable event type identifier
+    pub event_type: String,
+    /// Opaque binary payload
+    pub data: Vec<u8>,
+}
+
+/// Keyed AgentEvent carries an `AgentId` as the key so agents can publish keyed events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentEvent {
+    pub agent_id: AgentId,
+    pub event_type: String,
+    pub data: Vec<u8>,
+}
+
+impl Keyed for AgentEvent {
+    type K = u32;
+    fn key(&self) -> Self::K {
+        self.agent_id.0
+    }
 }
 
 // --- DDS Message Payloads ---
@@ -64,76 +81,40 @@ impl Keyed for AgentStatus {
     }
 }
 
-/// Phase Control Message from Syncer to Agents
-/// Direction: Syncer -> Agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentInstruction {
-    pub request_id: String,
-    pub target_phase: AgentRequestPhase,
-}
-
-/// Commands from Manager to All Components
-/// Direction: Manager -> Agent & Syncer
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ManagerCommand {
-    Start,
-    Stop,
-    Reset,
-    Shutdown,
-    StartStep(AgentInstruction),
-    ClearTasks,
-}
-
-// --- Unified Message Types (Topic Payloads) ---
-
-/// Request from Manager to Syncer/Agents
-/// Topic: REQUEST_FROM_MANAGER_TOPIC
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RequestFromManager<T> {
-    Command {
-        id: String,
-        command: ManagerCommand,
+/// Commands sent from Syncer to Agents
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AgentCommand<T, M, S> {
+    Initialization {
+        request_id: String,
+        state: Option<S>,
     },
-    DistributeTasks {
-        id: String,
-        tasks: Vec<T>,
+    /// Optionally carries a set of tasks for bundle construction
+    BundlingConstruction {
+        request_id: String,
+        tasks: Option<Vec<T>>,
     },
-}
-
-/// Reply to Manager from Syncer/Agents
-/// Topic: REPLY_TO_MANAGER_TOPIC
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReplyToManager {
-    pub request_id: String,
-    pub success: bool,
-    pub message: String,
-    // Optional status data
-    pub iteration: Option<usize>,
-    pub phase: Option<AgentPhase>,
-    pub active_agents: Option<u32>,
-    pub converged: Option<bool>,
-}
-
-/// Request from Syncer to Agents
-/// Topic: REQUEST_FROM_SYNCER_TOPIC
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RequestFromSyncer<T> {
-    Instruction(AgentInstruction),
-    ForwardTasks(Vec<T>),
-    ClearTasks,
+    /// Optionally carries consensus messages for conflict resolution
+    ConflictResolution {
+        request_id: String,
+        messages: Option<Vec<M>>,
+    },
+    /// Signal agents to terminate gracefully
+    Terminate {
+        request_id: String,
+    },
 }
 
 /// Reply to Syncer from Agents
-/// Topic: REPLY_TO_SYNCER_TOPIC
+/// Topic: AGENT_REPLY_TOPIC
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReplyToSyncer {
+pub struct AgentReply {
     pub request_id: String,
     pub agent_id: AgentId,
     pub iteration: usize,
     pub phase: AgentPhase,
 }
 
-impl Keyed for ReplyToSyncer {
+impl Keyed for AgentReply {
     type K = u32;
     fn key(&self) -> Self::K {
         self.agent_id.0

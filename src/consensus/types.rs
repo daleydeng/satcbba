@@ -1,22 +1,23 @@
 //! Core types and traits for the auction algorithms
 
+use derive_more::{Deref, DerefMut, From, Into};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 
-use std::num::NonZeroU32;
 use rustdds::Keyed;
+use std::num::NonZeroU32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
-#[derive(Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash, Default,
+)]
 pub enum Score {
     #[default]
     Zero,
     Positive(NonZeroU32),
 }
-
 
 impl Score {
     pub fn new(value: u32) -> Self {
@@ -69,6 +70,27 @@ impl From<Score> for u32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct TaskId(pub u32);
 
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default,
+    Deref,
+    DerefMut,
+    From,
+    Into,
+)]
+pub struct AddedTasks(pub Vec<TaskId>);
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, Deref, DerefMut, From, Into,
+)]
+pub struct ReleasedTasks(pub HashMap<TaskId, Vec<TaskId>>);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConvergenceStatus {
     Converged,
@@ -91,7 +113,9 @@ impl std::fmt::Display for AgentId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash, Default,
+)]
 pub struct Timestamp(pub u64);
 
 impl std::fmt::Display for Timestamp {
@@ -186,9 +210,13 @@ impl<T> BoundedSortedSet<T> {
     pub fn new(capacity: usize) -> Self {
         let actual_capacity = if capacity == 0 { usize::MAX } else { capacity };
         Self {
-            data: if actual_capacity == usize::MAX { Vec::new() } else { Vec::with_capacity(actual_capacity) },
+            data: if actual_capacity == usize::MAX {
+                Vec::new()
+            } else {
+                Vec::with_capacity(actual_capacity)
+            },
             capacity: actual_capacity,
-            }
+        }
     }
 
     pub fn push(&mut self, item: T) -> Result<(), Error>
@@ -196,10 +224,10 @@ impl<T> BoundedSortedSet<T> {
         T: PartialEq,
     {
         if self.data.contains(&item) {
-             return Err(Error::ItemAlreadyExists);
+            return Err(Error::ItemAlreadyExists);
         }
         if self.capacity != usize::MAX && self.data.len() >= self.capacity {
-             return Err(Error::CapacityFull);
+            return Err(Error::CapacityFull);
         }
 
         self.data.push(item);
@@ -211,13 +239,13 @@ impl<T> BoundedSortedSet<T> {
         T: PartialEq,
     {
         if self.data.contains(&item) {
-             return Err(Error::ItemAlreadyExists);
+            return Err(Error::ItemAlreadyExists);
         }
         if self.capacity != usize::MAX && self.data.len() >= self.capacity {
-             return Err(Error::CapacityFull);
+            return Err(Error::CapacityFull);
         }
         if index > self.data.len() {
-             return Err(Error::IndexOutOfBounds);
+            return Err(Error::IndexOutOfBounds);
         }
 
         self.data.insert(index, item);
@@ -323,4 +351,3 @@ impl<'a, T> IntoIterator for &'a BoundedSortedSet<T> {
         self.data.iter()
     }
 }
-

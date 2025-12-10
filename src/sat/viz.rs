@@ -1,13 +1,13 @@
-use std::path::Path;
-use plotters::prelude::*;
-use plotters::element::BitMapElement;
-use image::{imageops::FilterType, DynamicImage, Rgba};
+use super::score::SatelliteScoreFunction;
+use super::types::{ExploreTask, Satellite};
+use super::utils::{deg_from_e6, haversine_km};
 use crate::CBBA;
 use crate::consensus::types::BidInfo;
-use super::types::{ExploreTask, Satellite};
-use super::score::SatelliteScoreFunction;
-use super::utils::{deg_from_e6, haversine_km};
+use image::{DynamicImage, Rgba, imageops::FilterType};
+use plotters::element::BitMapElement;
+use plotters::prelude::*;
 use serde::Deserialize;
+use std::path::Path;
 
 #[derive(Default, Debug, Clone, Copy, Deserialize)]
 #[serde(default)]
@@ -17,21 +17,19 @@ pub struct VizConfig {
     pub show_path_time: bool,
 }
 
-
-pub fn visualize_iteration(
-    iteration: usize,
+pub fn render_visualization(
+    filename: &Path,
+    caption: &str,
     cbba_instances: &[CBBA<ExploreTask, Satellite, SatelliteScoreFunction>],
     all_tasks: &[ExploreTask],
-    output_dir: &Path,
     options: &VizConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let filename = output_dir.join(format!("iteration_{}.png", iteration));
     // Increase resolution to 2K (2560x1440) for better visibility
-    let root = BitMapBackend::new(&filename, (2560, 1440)).into_drawing_area();
+    let root = BitMapBackend::new(filename, (2560, 1440)).into_drawing_area();
     root.fill(&WHITE)?;
 
     let mut chart = ChartBuilder::on(&root)
-        .caption(format!("Iteration {}", iteration), ("sans-serif", 50).into_font())
+        .caption(caption, ("sans-serif", 50).into_font())
         .margin(20)
         .x_label_area_size(50)
         .y_label_area_size(50)
@@ -39,34 +37,33 @@ pub fn visualize_iteration(
 
     // Draw background image if available and requested
     if options.enable_map
-        && let Ok(bg_img) = image::open("images/map.png") {
-            let (w, h) = chart.plotting_area().dim_in_pixel();
-            let mut resized_bg = bg_img.resize_exact(w, h, FilterType::Nearest).to_rgba8();
+        && let Ok(bg_img) = image::open("images/map.png")
+    {
+        let (w, h) = chart.plotting_area().dim_in_pixel();
+        let mut resized_bg = bg_img.resize_exact(w, h, FilterType::Nearest).to_rgba8();
 
-            // Make background semi-transparent/lighter
-            for pixel in resized_bg.pixels_mut() {
-                let Rgba([r, g, b, a]) = *pixel;
-                // Reduce alpha to make it faded
-                *pixel = Rgba([r, g, b, (a as f32 * 0.15) as u8]);
-            }
-
-            // Map to chart coordinates: -180, 90 is top-left
-            chart.draw_series(std::iter::once(BitMapElement::from((
-                (-180.0, 90.0),
-                DynamicImage::ImageRgba8(resized_bg)
-            ))))?;
+        // Make background semi-transparent/lighter
+        for pixel in resized_bg.pixels_mut() {
+            let Rgba([r, g, b, a]) = *pixel;
+            // Reduce alpha to make it faded
+            *pixel = Rgba([r, g, b, (a as f32 * 0.15) as u8]);
         }
+
+        // Map to chart coordinates: -180, 90 is top-left
+        chart.draw_series(std::iter::once(BitMapElement::from((
+            (-180.0, 90.0),
+            DynamicImage::ImageRgba8(resized_bg),
+        ))))?;
+    }
 
     chart.configure_mesh().draw()?;
 
     // Draw tasks as Red Crosses
-    chart.draw_series(
-        all_tasks.iter().map(|task| {
-            let pos = (deg_from_e6(task.lon_e6), deg_from_e6(task.lat_e6));
-            // Increase size of the cross
-            EmptyElement::at(pos) + Cross::new((0, 0), 15, RED.filled())
-        })
-    )?;
+    chart.draw_series(all_tasks.iter().map(|task| {
+        let pos = (deg_from_e6(task.lon_e6), deg_from_e6(task.lat_e6));
+        // Increase size of the cross
+        EmptyElement::at(pos) + Cross::new((0, 0), 15, RED.filled())
+    }))?;
 
     // Label tasks
     for task in all_tasks {
@@ -78,7 +75,11 @@ pub fn visualize_iteration(
                 let allowed_str = if let Some(allowed) = &task.allowed_satellites {
                     let mut allowed_vec: Vec<_> = allowed.iter().collect();
                     allowed_vec.sort();
-                    let ids = allowed_vec.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+                    let ids = allowed_vec
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
                     format!(" Req:[{}]", ids)
                 } else {
                     "".to_string()
@@ -90,12 +91,17 @@ pub fn visualize_iteration(
                 let label_el = Text::new(
                     label,
                     (8, -8), // Offset to top-right
-                    ("sans-serif", 25).into_font().style(FontStyle::Bold).color(&RED)
+                    ("sans-serif", 25)
+                        .into_font()
+                        .style(FontStyle::Bold)
+                        .color(&RED),
                 );
 
                 let info_str = if options.show_task_info {
-                    format!("S:{:.0} D:{:.3} T:{:.0}s",
-                        task.base_score, task.decay_rate_per_hr, task.execution_duration_sec)
+                    format!(
+                        "S:{:.0} D:{:.3} T:{:.0}s",
+                        task.base_score, task.decay_rate_per_hr, task.execution_duration_sec
+                    )
                 } else {
                     "".to_string()
                 };
@@ -103,7 +109,7 @@ pub fn visualize_iteration(
                 let info_el = Text::new(
                     info_str,
                     (8, -28), // Above label
-                    ("sans-serif", 15).into_font().color(&RED.mix(0.8))
+                    ("sans-serif", 15).into_font().color(&RED.mix(0.8)),
                 );
 
                 EmptyElement::at(c) + label_el + info_el
@@ -125,12 +131,15 @@ pub fn visualize_iteration(
             8, // Increase satellite size
             &color.mix(0.8),
             &|c, _s, _st| {
-                 return EmptyElement::at(c)
-                    + Circle::new((0,0), 8, color.filled())
+                return EmptyElement::at(c)
+                    + Circle::new((0, 0), 8, color.filled())
                     + Text::new(
                         format!("A{}", agent.id),
                         (8, 8), // Offset to bottom-right
-                        ("sans-serif", 25).into_font().style(FontStyle::Bold).color(&BLUE)
+                        ("sans-serif", 25)
+                            .into_font()
+                            .style(FontStyle::Bold)
+                            .color(&BLUE),
                     );
             },
         ))?;
@@ -184,8 +193,16 @@ pub fn visualize_iteration(
                 // Fraction from P1 to Edge = (180 - abs(x1)) / Total
                 // Y_edge = y1 + (y2 - y1) * Fraction
 
-                let dist_to_edge = if prev_pos.0 > 0.0 { 180.0 - prev_pos.0 } else { 180.0 + prev_pos.0 };
-                let dist_from_edge = if task_pos.0 > 0.0 { 180.0 - task_pos.0 } else { 180.0 + task_pos.0 };
+                let dist_to_edge = if prev_pos.0 > 0.0 {
+                    180.0 - prev_pos.0
+                } else {
+                    180.0 + prev_pos.0
+                };
+                let dist_from_edge = if task_pos.0 > 0.0 {
+                    180.0 - task_pos.0
+                } else {
+                    180.0 + task_pos.0
+                };
                 let total_x_dist = dist_to_edge + dist_from_edge;
 
                 let fraction = dist_to_edge / total_x_dist;
@@ -220,7 +237,6 @@ pub fn visualize_iteration(
                     ShapeStyle::from(&color.mix(0.3)).stroke_width(1).style(ShapeStyle::Dashed),
                 ))?;
                 */
-
             } else {
                 // Normal line
                 chart.draw_series(LineSeries::new(
@@ -243,7 +259,10 @@ pub fn visualize_iteration(
                     let offset_x = if task_pos.0 > 0.0 { -20.0 } else { 20.0 };
                     (task_pos.0 + offset_x, task_pos.1)
                 } else {
-                    ((prev_pos.0 + task_pos.0) / 2.0, (prev_pos.1 + task_pos.1) / 2.0)
+                    (
+                        (prev_pos.0 + task_pos.0) / 2.0,
+                        (prev_pos.1 + task_pos.1) / 2.0,
+                    )
                 };
 
                 chart.draw_series(PointSeries::of_element(
@@ -251,32 +270,37 @@ pub fn visualize_iteration(
                     0,
                     &BLACK.mix(0.0),
                     &|c, _, _| {
-                        return EmptyElement::at(c) + Text::new(
-                            format!("{:.0}s", time_sec),
-                            (0, 0),
-                            ("sans-serif", 15).into_font().style(FontStyle::Bold).color(&color)
-                        );
-                    }
+                        return EmptyElement::at(c)
+                            + Text::new(
+                                format!("{:.0}s", time_sec),
+                                (0, 0),
+                                ("sans-serif", 15)
+                                    .into_font()
+                                    .style(FontStyle::Bold)
+                                    .color(&color),
+                            );
+                    },
                 ))?;
             }
 
             prev_pos = task_pos;
 
- use crate::consensus::types::Task;
+            use crate::consensus::types::Task;
 
             // Draw bid info
             let winners = &cbba.bids;
             if let Some(BidInfo::Winner(_, bid, _)) = winners.get(&task.id()) {
-                 chart.draw_series(PointSeries::of_element(
+                chart.draw_series(PointSeries::of_element(
                     vec![task_pos],
                     3,
                     &RED.mix(0.0),
                     &|c, _, _| {
-                        return EmptyElement::at(c) + Text::new(
-                            format!("{:.1}", bid),
-                            (8, 45), // Position below the requirement text
-                            ("sans-serif", 15).into_font().color(&BLACK.mix(0.8))
-                        );
+                        return EmptyElement::at(c)
+                            + Text::new(
+                                format!("{:.1}", bid),
+                                (8, 45), // Position below the requirement text
+                                ("sans-serif", 15).into_font().color(&BLACK.mix(0.8)),
+                            );
                     },
                 ))?;
             }

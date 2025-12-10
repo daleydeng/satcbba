@@ -4,11 +4,14 @@ pub mod logging;
 
 pub use logging::*;
 
-use crate::consensus::types::{Agent, AgentId, Task, TaskId, Score, BoundedSortedSet, ConsensusMessage, BidInfo};
-use crate::error::Error;
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use crate::cbba_info;
+use crate::consensus::types::{
+    AddedTasks, Agent, AgentId, BidInfo, BoundedSortedSet, ConsensusMessage, ReleasedTasks, Score,
+    Task, TaskId,
+};
+use crate::error::Error;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Configuration for CBBA algorithm
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -65,96 +68,6 @@ pub trait ScoreFunction<T: Task, A: Agent> {
     }
 }
 
-/// Determine the action to take based on the consensus rules
-fn determine_action(
-    sender_k: AgentId,
-    self_i: AgentId,
-    sender_bid: &BidInfo,
-    receiver_bid: &BidInfo,
-) -> Action {
-    let (y_kj, z_kj, t_kj) = match sender_bid {
-        BidInfo::Winner(w, s, t) => (*s, Some(*w), *t),
-        BidInfo::None(t) => (Score::default(), None, *t),
-    };
-
-    let (y_ij, z_ij, t_ij) = match receiver_bid {
-        BidInfo::Winner(w, s, t) => (*s, Some(*w), *t),
-        BidInfo::None(t) => (Score::default(), None, *t),
-    };
-
-    // Helper closure for score comparison with tie-breaking
-    let is_better_bid = |score_new: Score, winner_new: AgentId, score_current: Score, winner_current: AgentId| -> bool {
-        if score_new > score_current {
-            true
-        } else if score_new == score_current {
-            // Tie-breaking: Prefer smaller AgentId
-            winner_new < winner_current
-        } else {
-            false
-        }
-    };
-
-    if let Some(winner_k) = z_kj {
-        // Sender thinks `winner_k` is the winner
-        if let Some(winner_i) = z_ij {
-            // Receiver thinks `winner_i` is the winner
-
-            if winner_k == winner_i {
-                // Both agree on the winner: Update if sender has newer info
-                if t_kj > t_ij { Action::Update } else { Action::Leave }
-            } else if winner_k == sender_k {
-                // Sender thinks Sender wins
-                if winner_i == self_i {
-                    // Receiver thinks Receiver wins: Compare scores
-                    if is_better_bid(y_kj, winner_k, y_ij, winner_i) { Action::Update } else { Action::Leave }
-                } else {
-                    // Receiver thinks `m` (other) wins
-                    // Compare Sender (k) vs `m`
-                    if is_better_bid(y_kj, winner_k, y_ij, winner_i) { Action::Update } else { Action::Leave }
-                }
-            } else if winner_k == self_i {
-                // Sender thinks Receiver wins
-                if winner_i == sender_k {
-                    // Receiver thinks Sender wins -> Contradiction -> Reset
-                    Action::Reset
-                } else {
-                    // Receiver thinks `m` wins -> Reset (Sender thought I won, but I think `m` wins... weird, but Reset is safe)
-                    Action::Reset
-                }
-            } else {
-                // Sender thinks `m` (other) wins
-                if winner_i == self_i {
-                    // Receiver thinks Receiver wins: Compare `m` vs Receiver
-                    if is_better_bid(y_kj, winner_k, y_ij, winner_i) { Action::Update } else { Action::Leave }
-                } else if winner_i == sender_k {
-                    // Receiver thinks Sender wins: Sender conceded to `m` -> Update to `m`
-                    Action::Update
-                } else {
-                    // Receiver thinks `n` wins: Compare `m` vs `n`
-                    if is_better_bid(y_kj, winner_k, y_ij, winner_i) { Action::Update } else { Action::Leave }
-                }
-            }
-        } else {
-            // Receiver thinks None
-            Action::Update
-        }
-    } else {
-        // Sender thinks None
-        if let Some(winner_i) = z_ij {
-            if winner_i == sender_k {
-                // Receiver thinks Sender wins, but Sender says None -> Update (to None)
-                Action::Update
-            } else {
-                // Receiver thinks I or m wins -> Ignore Sender's None
-                Action::Leave
-            }
-        } else {
-            // Both None: Update if newer timestamp (though functionally doesn't matter much)
-            if t_kj > t_ij { Action::Update } else { Action::Leave }
-        }
-    }
-}
-
 /// Bundle for CBBA - ordered list of tasks
 pub type Bundle<T> = BoundedSortedSet<T>;
 
@@ -171,7 +84,7 @@ pub struct CBBA<T: Task, A: Agent, C: ScoreFunction<T, A>> {
     pub agent: A,
     pub config: Config,
     pub score_function: C,
-    pub available_tasks: Vec<T>,
+    pub current_tasks: Vec<T>,
     pub bundle: Bundle<T>,
     pub path: Path<T>,
 
@@ -204,71 +117,79 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
             agent,
             config,
             score_function,
-            available_tasks,
+            current_tasks: available_tasks,
             bundle: Bundle::new(max_tasks),
             path: Path::new(max_tasks),
             bids: HashMap::new(),
         }
     }
 
-    /// Set the list of available tasks and reset the agent state.
-    /// This is a full reset of the consensus process.
-    pub fn set_tasks(&mut self, tasks: Vec<T>) {
-        self.available_tasks = tasks;
-        self.reset();
-    }
-
-    /// Add a single task to the available tasks.
-    pub fn add_task(&mut self, task: T) {
-        if !self.available_tasks.contains(&task) {
-            self.available_tasks.push(task);
-        }
-    }
-
-    /// Clear all tasks and reset the agent state.
-    pub fn clear_tasks(&mut self) {
-        self.available_tasks.clear();
-        self.reset();
-    }
-
     /// Reset the internal state of the CBBA agent, clearing bundles, paths, and bids.
-    pub fn reset(&mut self) {
-        let max_tasks = if self.config.max_tasks_per_agent == 0 {
-            usize::MAX
-        } else {
-            self.config.max_tasks_per_agent
-        };
-        self.bundle = Bundle::new(max_tasks);
-        self.path = Path::new(max_tasks);
+    pub fn clear(&mut self) {
+        self.current_tasks.clear();
+        self.bundle.clear();
+        self.path.clear();
         self.bids.clear();
     }
 
     /// Phase 1: Bundle Construction
-    pub fn bundle_construction_phase(&mut self) -> Result<Vec<TaskId>, Error> {
-        let mut added_tasks = Vec::new();
+    ///
+    /// Accepts an optional slice of tasks. If provided, uses these tasks and updates current_tasks.
+    /// If not provided, uses current_tasks.
+    pub fn bundle_construction_phase(&mut self, tasks: Option<&[T]>) -> Result<AddedTasks, Error> {
+        if let Some(ts) = tasks {
+            if ts.is_empty() {
+                self.clear();
+                return Ok(AddedTasks::default());
+            }
+            // Remove tasks not in the new list from bundle, path, and bids
+            use std::collections::HashSet;
+            let new_set: HashSet<_> = ts.iter().map(|t| t.id()).collect();
+            let old_set: HashSet<_> = self.current_tasks.iter().map(|t| t.id()).collect();
+            let removed: Vec<_> = old_set.difference(&new_set).cloned().collect();
 
-        // Continue adding tasks until bundle is full or no valid tasks remain
+            // Remove from bundle
+            self.bundle.retain(|t| new_set.contains(&t.id()));
+            // Remove from path
+            self.path.retain(|t| new_set.contains(&t.id()));
+            // Remove from bids
+            for tid in &removed {
+                self.bids.remove(tid);
+            }
+
+            self.current_tasks = ts.to_vec();
+        }
+        let task_source: &[T] = &self.current_tasks;
+        let mut added_tasks = AddedTasks::default();
+
         while !self.bundle.is_full() {
-            // Select task with highest marginal score improvement
-            // This function now handles all filtering and calculation to avoid duplication
-            let Some((selected_task, marginal_score, new_path)) = self.select_best_marginal_task() else {
+            // Select task with highest marginal score improvement from the given task source
+            let Some((selected_task, marginal_score, new_path)) =
+                self.select_best_marginal_task_from(task_source)
+            else {
                 break;
             };
 
-            // Add to bundle and update path
             match self.bundle.push(selected_task.clone()) {
-                Ok(_) => {},
-                Err(Error::CapacityFull) => panic!("Capacity full but bundle.is_full() returned false"),
+                Ok(_) => {}
+                Err(Error::CapacityFull) => {
+                    panic!("Capacity full but bundle.is_full() returned false")
+                }
                 Err(e) => panic!("Failed to push to bundle: {:?}", e),
             }
 
             self.path = new_path;
 
-            // Update winning bids and agents
             let task_id = selected_task.id();
-            self.bids.insert(task_id, BidInfo::winner(self.agent.id(), marginal_score));
+            self.bids
+                .insert(task_id, BidInfo::winner(self.agent.id(), marginal_score));
 
-            cbba_info!("Agent {} added task {} with score {}", self.agent.id(), task_id, marginal_score);
+            cbba_info!(
+                "Agent {} added task {} with score {}",
+                self.agent.id(),
+                task_id,
+                marginal_score
+            );
 
             added_tasks.push(task_id);
         }
@@ -276,23 +197,22 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
         Ok(added_tasks)
     }
 
-    fn select_best_marginal_task(&self) -> Option<(T, Score, BoundedSortedSet<T>)> {
-        self.available_tasks
+    /// Like select_best_marginal_task, but takes a task slice to search from
+    fn select_best_marginal_task_from(
+        &self,
+        tasks: &[T],
+    ) -> Option<(T, Score, BoundedSortedSet<T>)> {
+        tasks
             .iter()
             .filter(|task| {
-                !self.bundle.contains(task)
-                    && self.score_function.check(&self.agent, task)
+                !self.bundle.contains(task) && self.score_function.check(&self.agent, task)
             })
             .filter_map(|task| {
-                // Calculate marginal score and potential new path
                 let (marginal_score, new_path) = self.calculate_marginal_score(task)?;
-
-                // Check if score is positive and better than current winning bid
                 let current_winning_bid = match self.bids.get(&task.id()) {
                     Some(BidInfo::Winner(_, s, _)) => *s,
                     _ => Score::default(),
                 };
-
                 if marginal_score > current_winning_bid {
                     Some((task.clone(), marginal_score, new_path))
                 } else {
@@ -307,7 +227,9 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
             panic!("Task already in bundle in calculate_marginal_score");
         }
 
-        let current_total_score = self.score_function.calc_total_score(&self.agent, self.path.as_slice());
+        let current_total_score = self
+            .score_function
+            .calc_total_score(&self.agent, self.path.as_slice());
         let (_, new_total_score, best_path) = self.find_best_insert_position(&self.path, task)?;
 
         let marginal = new_total_score.saturating_sub(current_total_score);
@@ -333,7 +255,9 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
             let mut temp_path = path.clone();
             if temp_path.insert(pos, task.clone()).is_ok() {
                 // Calculate total score for this configuration
-                let current_score = self.score_function.calc_total_score(&self.agent, temp_path.as_slice());
+                let current_score = self
+                    .score_function
+                    .calc_total_score(&self.agent, temp_path.as_slice());
 
                 if current_score > best_score {
                     best_score = current_score;
@@ -350,15 +274,20 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
         }
     }
 
-     /// Phase 2: Consensus
+    /// Build a consensus message representing the current winning bids for this agent.
+    pub fn consensus_message(&self) -> ConsensusMessage {
+        ConsensusMessage {
+            agent_id: self.agent.id(),
+            bids: self.bids.clone(),
+        }
+    }
+
+    /// Phase 2: Consensus
     ///
     /// This phase handles conflict resolution by processing incoming consensus messages.
     /// It updates the internal state (winning bids/agents) and releases tasks if outbid.
-    pub fn consensus_phase(
-        &mut self,
-        messages: &[ConsensusMessage],
-    ) -> Result<HashMap<TaskId, Vec<TaskId>>, Error> {
-        let mut dropped_tasks = HashMap::new();
+    pub fn consensus_phase(&mut self, messages: &[ConsensusMessage]) -> ReleasedTasks {
+        let mut dropped_tasks = ReleasedTasks::default();
         // Implement consensus
         // In CBBA, this updates y_ij and z_ij based on messages
         for message in messages {
@@ -373,15 +302,24 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
             let self_i = self.agent.id();
 
             // Process all task IDs from both message and current winners
-            let all_task_ids: std::collections::HashSet<_> = message.bids
+            let all_task_ids: std::collections::HashSet<_> = message
+                .bids
                 .keys()
                 .chain(self.bids.keys())
                 .cloned()
                 .collect();
 
             for task_id in all_task_ids {
-                let sender_bid = message.bids.get(&task_id).cloned().unwrap_or(BidInfo::none_initial());
-                let receiver_bid = self.bids.get(&task_id).cloned().unwrap_or(BidInfo::none_initial());
+                let sender_bid = message
+                    .bids
+                    .get(&task_id)
+                    .cloned()
+                    .unwrap_or(BidInfo::none_initial());
+                let receiver_bid = self
+                    .bids
+                    .get(&task_id)
+                    .cloned()
+                    .unwrap_or(BidInfo::none_initial());
 
                 // Pre-calculate extracted values for logic after action determination
                 let (y_kj, z_kj, t_kj) = match sender_bid {
@@ -389,12 +327,7 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
                     BidInfo::None(t) => (Score::default(), None, t),
                 };
 
-                let action = determine_action(
-                    sender_k,
-                    self_i,
-                    &sender_bid,
-                    &receiver_bid,
-                );
+                let action = determine_action(sender_k, self_i, &sender_bid, &receiver_bid);
 
                 match action {
                     Action::Update => {
@@ -406,7 +339,8 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
                         self.bids.insert(task_id, new_info);
                     }
                     Action::Reset => {
-                        self.bids.insert(task_id, BidInfo::none_with_timestamp(t_kj));
+                        self.bids
+                            .insert(task_id, BidInfo::none_with_timestamp(t_kj));
                     }
                     Action::Leave => {}
                 }
@@ -419,7 +353,11 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
                 };
                 if current_winner != Some(self_i) {
                     if let Some(task) = self.bundle.find(|t| task_id == t.id()) {
-                        cbba_info!("Agent {} releasing task {} due to conflict resolution", self_i, task_id);
+                        cbba_info!(
+                            "Agent {} releasing task {} due to conflict resolution",
+                            self_i,
+                            task_id
+                        );
                         tasks_released_directly.push(task.clone());
                     }
                 }
@@ -431,7 +369,7 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
                 dropped_tasks.insert(task.id(), tasks_released_indirectly);
             }
         }
-        Ok(dropped_tasks)
+        dropped_tasks
     }
 
     pub fn release_task_and_successors(&mut self, task: &T) -> Vec<TaskId> {
@@ -444,8 +382,17 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
         let tasks_to_remove: Vec<T> = self.bundle.as_slice()[pos..].to_vec();
 
         if tasks_to_remove.len() > 1 {
-            let successor_ids: Vec<_> = tasks_to_remove.iter().skip(1).map(|t| t.id().to_string()).collect();
-            cbba_info!("Agent {} removing successors of task {}: [{}]", self.agent.id(), task.id(), successor_ids.join(", "));
+            let successor_ids: Vec<_> = tasks_to_remove
+                .iter()
+                .skip(1)
+                .map(|t| t.id().to_string())
+                .collect();
+            cbba_info!(
+                "Agent {} removing successors of task {}: [{}]",
+                self.agent.id(),
+                task.id(),
+                successor_ids.join(", ")
+            );
         }
 
         // Truncate bundle directly
@@ -466,11 +413,129 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBBA<T, A, C> {
             // However, successor tasks are removed due to path constraints (not direct messages),
             // so we must explicitly reset our winning status for them if we held it.
             if let Some(BidInfo::Winner(w, _, t)) = self.bids.get(&task_to_remove.id())
-                && *w == self.agent.id() {
-                    self.bids.insert(task_to_remove.id(), BidInfo::None(*t));
-                }
+                && *w == self.agent.id()
+            {
+                self.bids.insert(task_to_remove.id(), BidInfo::None(*t));
+            }
         }
         removed_ids
     }
+}
 
+/// Determine the action to take based on the consensus rules
+fn determine_action(
+    sender_k: AgentId,
+    self_i: AgentId,
+    sender_bid: &BidInfo,
+    receiver_bid: &BidInfo,
+) -> Action {
+    let (y_kj, z_kj, t_kj) = match sender_bid {
+        BidInfo::Winner(w, s, t) => (*s, Some(*w), *t),
+        BidInfo::None(t) => (Score::default(), None, *t),
+    };
+
+    let (y_ij, z_ij, t_ij) = match receiver_bid {
+        BidInfo::Winner(w, s, t) => (*s, Some(*w), *t),
+        BidInfo::None(t) => (Score::default(), None, *t),
+    };
+
+    // Helper closure for score comparison with tie-breaking
+    let is_better_bid = |score_new: Score,
+                         winner_new: AgentId,
+                         score_current: Score,
+                         winner_current: AgentId|
+     -> bool {
+        if score_new > score_current {
+            true
+        } else if score_new == score_current {
+            // Tie-breaking: Prefer smaller AgentId
+            winner_new < winner_current
+        } else {
+            false
+        }
+    };
+
+    if let Some(winner_k) = z_kj {
+        // Sender thinks `winner_k` is the winner
+        if let Some(winner_i) = z_ij {
+            // Receiver thinks `winner_i` is the winner
+
+            if winner_k == winner_i {
+                // Both agree on the winner: Update if sender has newer info
+                if t_kj > t_ij {
+                    Action::Update
+                } else {
+                    Action::Leave
+                }
+            } else if winner_k == sender_k {
+                // Sender thinks Sender wins
+                if winner_i == self_i {
+                    // Receiver thinks Receiver wins: Compare scores
+                    if is_better_bid(y_kj, winner_k, y_ij, winner_i) {
+                        Action::Update
+                    } else {
+                        Action::Leave
+                    }
+                } else {
+                    // Receiver thinks `m` (other) wins
+                    // Compare Sender (k) vs `m`
+                    if is_better_bid(y_kj, winner_k, y_ij, winner_i) {
+                        Action::Update
+                    } else {
+                        Action::Leave
+                    }
+                }
+            } else if winner_k == self_i {
+                // Sender thinks Receiver wins
+                if winner_i == sender_k {
+                    // Receiver thinks Sender wins -> Contradiction -> Reset
+                    Action::Reset
+                } else {
+                    // Receiver thinks `m` wins -> Reset (Sender thought I won, but I think `m` wins... weird, but Reset is safe)
+                    Action::Reset
+                }
+            } else {
+                // Sender thinks `m` (other) wins
+                if winner_i == self_i {
+                    // Receiver thinks Receiver wins: Compare `m` vs Receiver
+                    if is_better_bid(y_kj, winner_k, y_ij, winner_i) {
+                        Action::Update
+                    } else {
+                        Action::Leave
+                    }
+                } else if winner_i == sender_k {
+                    // Receiver thinks Sender wins: Sender conceded to `m` -> Update to `m`
+                    Action::Update
+                } else {
+                    // Receiver thinks `n` wins: Compare `m` vs `n`
+                    if is_better_bid(y_kj, winner_k, y_ij, winner_i) {
+                        Action::Update
+                    } else {
+                        Action::Leave
+                    }
+                }
+            }
+        } else {
+            // Receiver thinks None
+            Action::Update
+        }
+    } else {
+        // Sender thinks None
+        if let Some(winner_i) = z_ij {
+            if winner_i == sender_k {
+                // Receiver thinks Sender wins, but Sender says None -> Update (to None)
+                Action::Update
+            } else {
+                // Receiver thinks I or m wins -> Ignore Sender's None
+                Action::Leave
+            }
+        } else {
+            // Both None: Update if newer timestamp (though functionally doesn't matter much)
+            if t_kj > t_ij {
+                Action::Update
+            } else {
+                Action::Leave
+            }
+        }
+    }
 }

@@ -1,15 +1,15 @@
 data {
   satellites {
-    mode = "file"
-    file {
-        path = "examples/data/distance_only/satellites.json"
+    mode = "random"
+    random {
+        count = 5
     }
   }
 
   tasks {
-    mode = "file"
-    file {
-        path = "examples/data/distance_only/tasks.json"
+    mode = "random"
+    random {
+        count = 20
     }
   }
 }
@@ -17,7 +17,7 @@ data {
 dds {
   domain_id = 0
   num_agents = 5
-  expected_agents = 5
+  max_iterations = 100
 }
 
 viz {
@@ -29,7 +29,7 @@ viz {
 algo {
   method = "cbba"
   cbba {
-    max_tasks_per_agent = 5
+    max_tasks_per_agent = 0
   }
 }
 

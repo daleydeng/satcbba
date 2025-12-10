@@ -28,6 +28,7 @@ tracing-log = "0.2.0"
 chrono = "0.4"
 anyhow = "1.0.100"
 uuid = { version = "1.4", features = ["v4"] }
+derive_more = "0.99"
 
 [build-dependencies]
 glob = "0.3"
@@ -41,17 +42,28 @@ name = "sim_sat"
 path = "examples/ex1/sim_sat.rs"
 
 [[example]]
-name = "dds_agent"
+name = "ex2_dds_agent"
 path = "examples/ex2/dds_agent.rs"
 
 [[example]]
-name = "dds_syncer"
+name = "ex2_dds_syncer"
 path = "examples/ex2/dds_syncer.rs"
-
 [[example]]
-name = "dds_manager"
-path = "examples/ex2/dds_manager.rs"
-
-[[example]]
-name = "dds_runner"
+name = "ex2_dds_runner"
 path = "examples/ex2/dds_runner.rs"
+
+[[example]]
+name = "ex3_dds_agent"
+path = "examples/ex3/dds_agent.rs"
+
+[[example]]
+name = "ex3_dds_syncer"
+path = "examples/ex3/dds_syncer.rs"
+
+[[example]]
+name = "ex3_dds_runner"
+path = "examples/ex3/dds_runner.rs"
+
+[[example]]
+name = "ex3_dds_inproc_runner"
+path = "examples/ex3/dds_inproc_runner.rs"

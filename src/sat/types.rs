@@ -1,6 +1,6 @@
+use crate::consensus::types::{Agent, AgentId, Task, TaskId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use crate::consensus::types::{Task, Agent, TaskId, AgentId};
 
 /// Use integer microdegrees (degrees * 1e6) for lat/lon in structs so they remain `Hash`/`Eq`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -30,13 +30,19 @@ impl ExploreTask {
         allowed_satellites: Option<HashSet<AgentId>>,
     ) -> Result<Self, Error> {
         if decay_rate_per_hr < 0.0 {
-            return Err(Error::ValidationError("decay_rate_per_hr must be non-negative".to_string()));
+            return Err(Error::ValidationError(
+                "decay_rate_per_hr must be non-negative".to_string(),
+            ));
         }
         if base_score < 0.0 {
-            return Err(Error::ValidationError("base_score must be non-negative".to_string()));
+            return Err(Error::ValidationError(
+                "base_score must be non-negative".to_string(),
+            ));
         }
         if execution_duration_sec < 0.0 {
-            return Err(Error::ValidationError("execution_duration_sec must be non-negative".to_string()));
+            return Err(Error::ValidationError(
+                "execution_duration_sec must be non-negative".to_string(),
+            ));
         }
         Ok(Self {
             id,

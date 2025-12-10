@@ -1,8 +1,8 @@
-use std::path::Path;
 use chrono::Local;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
-use tracing_subscriber::fmt::time::FormatTime;
+use std::path::Path;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt::time::FormatTime;
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone, Copy)]
 struct CustomTimer;
@@ -14,7 +14,10 @@ impl FormatTime for CustomTimer {
     }
 }
 
-pub fn init(log_path: impl AsRef<Path>, level: &str) -> Result<WorkerGuard, Box<dyn std::error::Error>> {
+pub fn init(
+    log_path: impl AsRef<Path>,
+    level: &str,
+) -> Result<WorkerGuard, Box<dyn std::error::Error>> {
     let file = std::fs::File::create(log_path)?;
     let (non_blocking, guard) = tracing_appender::non_blocking(file);
 
@@ -23,14 +26,14 @@ pub fn init(log_path: impl AsRef<Path>, level: &str) -> Result<WorkerGuard, Box<
             tracing_subscriber::fmt::layer()
                 .with_timer(CustomTimer)
                 .with_writer(std::io::stdout)
-                .with_filter(tracing_subscriber::EnvFilter::new(level))
+                .with_filter(tracing_subscriber::EnvFilter::new(level)),
         )
         .with(
             tracing_subscriber::fmt::layer()
                 .with_timer(CustomTimer)
                 .with_writer(non_blocking)
                 .with_ansi(false)
-                .with_filter(tracing_subscriber::EnvFilter::new(level))
+                .with_filter(tracing_subscriber::EnvFilter::new(level)),
         )
         .init();
 

@@ -1,11 +1,13 @@
 //! Consensus-Based Auction Algorithm (CBAA) implementation
 
-use crate::consensus::types::{Agent, AgentId, Task, TaskId, Score, Timestamp, ConsensusMessage, BidInfo};
+use crate::consensus::types::{
+    Agent, AgentId, BidInfo, ConsensusMessage, Score, Task, TaskId, Timestamp,
+};
 use crate::error::Error;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 
 /// Configuration for CBAA algorithm
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,7 +181,10 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBAA<T, A, C> {
         self.state.iteration += 1;
 
         let bundle_vec = self.bundle.clone().map(|t| vec![t]).unwrap_or_default();
-        Ok((bundle_vec, self.state.converged || self.state.iteration >= self.config.max_iterations))
+        Ok((
+            bundle_vec,
+            self.state.converged || self.state.iteration >= self.config.max_iterations,
+        ))
     }
 
     /// Execute the auction phase
@@ -201,7 +206,10 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBAA<T, A, C> {
                 self.state
                     .winning_agents
                     .insert(selected_task.id(), self.agent.id());
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_micros() as u64;
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
                 self.state
                     .task_timestamps
                     .insert(selected_task.id(), Timestamp(now));
@@ -217,10 +225,7 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBAA<T, A, C> {
     /// Execute the consensus phase
     ///
     /// Processes messages from other agents and resolves conflicts.
-    pub fn consensus_phase(
-        &mut self,
-        messages: Vec<ConsensusMessage>,
-    ) -> Result<(), Error> {
+    pub fn consensus_phase(&mut self, messages: Vec<ConsensusMessage>) -> Result<(), Error> {
         let empty_messages = messages.is_empty();
         for message in messages {
             self.process_consensus_message(message)?;
@@ -260,8 +265,7 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBAA<T, A, C> {
     pub fn has_converged(&self) -> bool {
         // Use config to determine convergence criteria
         // For now, simple convergence check - could be enhanced with config parameters
-        self.state.converged
-            || self.state.iteration >= self.config.max_iterations
+        self.state.converged || self.state.iteration >= self.config.max_iterations
     }
 
     pub fn get_iteration(&self) -> u64 {
@@ -291,10 +295,7 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBAA<T, A, C> {
                     return false;
                 }
 
-                let score = self.score_function.calc(
-                    &self.agent,
-                    task,
-                );
+                let score = self.score_function.calc(&self.agent, task);
 
                 let current_winning_bid = self
                     .state
@@ -313,20 +314,18 @@ impl<T: Task, A: Agent, C: ScoreFunction<T, A>> CBAA<T, A, C> {
         valid_tasks
             .iter()
             .map(|task| {
-                let bid = self
-                    .score_function
-                    .calc(&self.agent, task);
+                let bid = self.score_function.calc(&self.agent, task);
                 (task.clone(), bid)
             })
             .max_by(|a, b| a.1.cmp(&b.1))
             .ok_or(Error::InvalidBid)
     }
 
-    fn process_consensus_message(
-        &mut self,
-        message: ConsensusMessage,
-    ) -> Result<(), Error> {
-        let ConsensusMessage { agent_id: _, bids: updates } = message;
+    fn process_consensus_message(&mut self, message: ConsensusMessage) -> Result<(), Error> {
+        let ConsensusMessage {
+            agent_id: _,
+            bids: updates,
+        } = message;
 
         for (task_id, bid_info) in updates {
             let (bid, winner, _timestamp) = match bid_info {

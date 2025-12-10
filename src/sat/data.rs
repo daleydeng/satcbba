@@ -1,11 +1,11 @@
+use super::types::{ExploreTask, Satellite};
+use crate::consensus::types::{AgentId, TaskId};
+use anyhow::{Context, Result};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::fs;
 use std::path::Path;
-use serde::{Serialize, Deserialize};
-use serde_json;
-use rand::Rng;
-use super::types::{ExploreTask, Satellite};
-use crate::consensus::types::{TaskId, AgentId};
-use anyhow::{Result, Context};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -79,13 +79,15 @@ pub fn generate_random_satellites(params: &SatGenParams) -> Vec<Satellite> {
 
 pub fn load_tasks(path: &Path) -> Result<Vec<ExploreTask>> {
     let json = fs::read_to_string(path).context("Failed to read tasks file")?;
-    let tasks: Vec<ExploreTask> = serde_json::from_str(&json).context("Failed to parse tasks json")?;
+    let tasks: Vec<ExploreTask> =
+        serde_json::from_str(&json).context("Failed to parse tasks json")?;
     Ok(tasks)
 }
 
 pub fn load_satellites(path: &Path) -> Result<Vec<Satellite>> {
     let json = fs::read_to_string(path).context("Failed to read satellites file")?;
-    let sats: Vec<Satellite> = serde_json::from_str(&json).context("Failed to parse satellites json")?;
+    let sats: Vec<Satellite> =
+        serde_json::from_str(&json).context("Failed to parse satellites json")?;
     Ok(sats)
 }
 
@@ -101,7 +103,12 @@ pub fn save_satellites(sats: &[Satellite], path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn generate_and_save_data(task_params: &TaskGenParams, sat_params: &SatGenParams, tasks_path: &Path, agents_path: &Path) -> Result<()> {
+pub fn generate_and_save_data(
+    task_params: &TaskGenParams,
+    sat_params: &SatGenParams,
+    tasks_path: &Path,
+    agents_path: &Path,
+) -> Result<()> {
     let tasks = generate_random_tasks(task_params);
     let sats = generate_random_satellites(sat_params);
 

@@ -59,14 +59,17 @@
 //! let result = cbaa.auction_phase();
 //! ```
 
+#![allow(ambiguous_glob_reexports)]
+
+pub mod config;
 pub mod consensus;
 pub mod dds;
-pub mod sat;
 pub mod error;
 pub mod logger;
-pub mod config;
+pub mod sat;
 
 pub use consensus::*;
 pub use dds::*;
-pub use sat::*;
 pub use error::*;
+pub use sat::*;
+

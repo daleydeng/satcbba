@@ -1,14 +1,26 @@
-use serde::Deserialize;
 use cbbadds::cbba::Config as CBBAConfig;
-use cbbadds::sat::data::{TaskGenParams, SatGenParams, SourceMode};
+use cbbadds::sat::data::{SatGenParams, SourceMode, TaskGenParams};
 use cbbadds::sat::viz::VizConfig;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
 pub struct DdsConfig {
     pub domain_id: u16,
-    pub num_agents: usize,
-    #[serde(default)]
-    pub expected_agents: usize, // For server to know how many to wait for
+    pub handshake_timeout_ms: u64,
+    pub max_iterations: usize,
+    pub terminate_agents_on_convergence: bool,
+}
+
+impl Default for DdsConfig {
+    fn default() -> Self {
+        Self {
+            domain_id: 0,
+            handshake_timeout_ms: 5_000,
+            max_iterations: 100,
+            terminate_agents_on_convergence: false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -35,8 +47,13 @@ pub enum SatSourceConfig {
 impl From<SatSourceWrapper> for SatSourceConfig {
     fn from(w: SatSourceWrapper) -> Self {
         match w.mode {
-            SourceMode::Random => SatSourceConfig::Random(w.random.unwrap_or(SatGenParams { count: 5, ..Default::default() })),
-            SourceMode::File => SatSourceConfig::File(w.file.expect("Missing file config for file mode")),
+            SourceMode::Random => SatSourceConfig::Random(w.random.unwrap_or(SatGenParams {
+                count: 5,
+                ..Default::default()
+            })),
+            SourceMode::File => {
+                SatSourceConfig::File(w.file.expect("Missing file config for file mode"))
+            }
         }
     }
 }
@@ -61,6 +78,7 @@ struct TaskSourceWrapper {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(from = "TaskSourceWrapper")]
+#[allow(dead_code, unused)]
 pub enum TaskSourceConfig {
     Random(TaskGenParams),
     File(FileSourceConfig),
@@ -69,18 +87,17 @@ pub enum TaskSourceConfig {
 impl From<TaskSourceWrapper> for TaskSourceConfig {
     fn from(w: TaskSourceWrapper) -> Self {
         match w.mode {
-            SourceMode::Random => TaskSourceConfig::Random(w.random.unwrap_or(TaskGenParams { count: 10, ..Default::default() })),
-            SourceMode::File => TaskSourceConfig::File(w.file.expect("Missing file config for file mode")),
+            SourceMode::Random => TaskSourceConfig::Random(w.random.unwrap_or_default()),
+            SourceMode::File => {
+                TaskSourceConfig::File(w.file.expect("Missing file config for file mode"))
+            }
         }
     }
 }
 
 impl Default for TaskSourceConfig {
     fn default() -> Self {
-        TaskSourceConfig::Random(TaskGenParams {
-            count: 10,
-            ..Default::default()
-        })
+        TaskSourceConfig::Random(TaskGenParams::default())
     }
 }
 
@@ -124,6 +141,7 @@ pub struct AlgoConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct Config {
     pub dds: DdsConfig,
 

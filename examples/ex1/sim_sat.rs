@@ -1,26 +1,25 @@
 //! Satellite exploration example demonstrating CBAA usage with random generation and visualization
 
+use cbbadds::sat::data::{SatGenParams, SourceMode, TaskGenParams};
 use clap::Parser;
 use serde::Deserialize;
-use cbbadds::sat::data::{TaskGenParams, SatGenParams, SourceMode};
 
-use tracing::{info, warn};
-use cbbadds::logger;
-use cbbadds::consensus::cbba::logging as cbba_log;
 use cbbadds::config::load_pkl;
+use cbbadds::consensus::cbba::logging as cbba_log;
+use cbbadds::logger;
+use tracing::{info, warn};
 
-use std::path::Path;
-use chrono::Local;
 use cbbadds::CBBA;
 use cbbadds::cbba::Config as CBBAConfig;
 use cbbadds::consensus::types::ConsensusMessage;
 use cbbadds::sat::score::SatelliteScoreFunction;
 use cbbadds::sat::viz::VizConfig;
 use cbbadds::sat::{
-    generate_random_tasks, generate_random_satellites,
-    load_tasks, load_satellites, save_tasks, save_satellites,
-    visualize_iteration,
+    generate_random_satellites, generate_random_tasks, load_satellites, load_tasks,
+    render_visualization, save_satellites, save_tasks,
 };
+use chrono::Local;
+use std::path::Path;
 
 #[derive(Debug, Deserialize, Clone)]
 struct FileSourceConfig {
@@ -46,8 +45,13 @@ enum SatSourceConfig {
 impl From<SatSourceWrapper> for SatSourceConfig {
     fn from(w: SatSourceWrapper) -> Self {
         match w.mode {
-            SourceMode::Random => SatSourceConfig::Random(w.random.unwrap_or(SatGenParams { count: 5, ..Default::default() })),
-            SourceMode::File => SatSourceConfig::File(w.file.expect("Missing file config for file mode")),
+            SourceMode::Random => SatSourceConfig::Random(w.random.unwrap_or(SatGenParams {
+                count: 5,
+                ..Default::default()
+            })),
+            SourceMode::File => {
+                SatSourceConfig::File(w.file.expect("Missing file config for file mode"))
+            }
         }
     }
 }
@@ -80,8 +84,13 @@ enum TaskSourceConfig {
 impl From<TaskSourceWrapper> for TaskSourceConfig {
     fn from(w: TaskSourceWrapper) -> Self {
         match w.mode {
-            SourceMode::Random => TaskSourceConfig::Random(w.random.unwrap_or(TaskGenParams { count: 10, ..Default::default() })),
-            SourceMode::File => TaskSourceConfig::File(w.file.expect("Missing file config for file mode")),
+            SourceMode::Random => TaskSourceConfig::Random(w.random.unwrap_or(TaskGenParams {
+                count: 10,
+                ..Default::default()
+            })),
+            SourceMode::File => {
+                TaskSourceConfig::File(w.file.expect("Missing file config for file mode"))
+            }
         }
     }
 }
@@ -101,7 +110,6 @@ struct DataConfig {
     satellites: SatSourceConfig,
     tasks: TaskSourceConfig,
 }
-
 
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -128,7 +136,6 @@ enum AlgorithmMethod {
     CBBA,
 }
 
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct AlgoConfig {
@@ -144,8 +151,6 @@ struct SimConfig {
     output_config: OutputConfig,
     algo: AlgoConfig,
 }
-
-
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -198,14 +203,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Save generated satellites
             save_satellites(&sats, &result_dir.join("satellites.json"))?;
             sats
-        },
+        }
         SatSourceConfig::File(cfg) => {
             info!("Loading satellites from file: {}", cfg.path);
             let path = Path::new(&cfg.path);
             // Copy file to result dir
-             if let Err(e) = std::fs::copy(path, result_dir.join("satellites.json")) {
-                 warn!("Warning: Failed to copy satellites file: {}", e);
-             }
+            if let Err(e) = std::fs::copy(path, result_dir.join("satellites.json")) {
+                warn!("Warning: Failed to copy satellites file: {}", e);
+            }
             load_satellites(path)?
         }
     };
@@ -213,24 +218,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load Tasks
     let tasks = match &config.data.tasks {
         TaskSourceConfig::Random(cfg) => {
-             info!("Generating {} random tasks", cfg.count);
-             let tasks = generate_random_tasks(cfg);
-             // Save generated tasks
-             save_tasks(&tasks, &result_dir.join("tasks.json"))?;
-             tasks
-        },
+            info!("Generating {} random tasks", cfg.count);
+            let tasks = generate_random_tasks(cfg);
+            // Save generated tasks
+            save_tasks(&tasks, &result_dir.join("tasks.json"))?;
+            tasks
+        }
         TaskSourceConfig::File(cfg) => {
-             info!("Loading tasks from file: {}", cfg.path);
-             let path = Path::new(&cfg.path);
-             // Copy file to result dir
-             if let Err(e) = std::fs::copy(path, result_dir.join("tasks.json")) {
-                 warn!("Warning: Failed to copy tasks file: {}", e);
-             }
-             load_tasks(path)?
+            info!("Loading tasks from file: {}", cfg.path);
+            let path = Path::new(&cfg.path);
+            // Copy file to result dir
+            if let Err(e) = std::fs::copy(path, result_dir.join("tasks.json")) {
+                warn!("Warning: Failed to copy tasks file: {}", e);
+            }
+            load_tasks(path)?
         }
     };
-
-
 
     let mut cbbas = Vec::new();
 
@@ -240,7 +243,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create CBBA instances for each agent
     for agent in agents {
         let score_function = SatelliteScoreFunction;
-        let cbba = CBBA::new(agent, score_function, tasks.clone(), Some(cbba_config.clone()));
+        let cbba = CBBA::new(
+            agent,
+            score_function,
+            tasks.clone(),
+            Some(cbba_config.clone()),
+        );
         cbbas.push(cbba);
     }
 
@@ -251,7 +259,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Running CBBA iterations...\n");
 
     // Visualize initial state (Iteration 0)
-    visualize_iteration(0, &cbbas, &tasks, &result_dir, &config.viz)?;
+    render_visualization(
+        &result_dir.join(format!("iteration_{}.png", 0)),
+        "Iteration 0",
+        &cbbas,
+        &tasks,
+        &config.viz,
+    )?;
 
     while !converged && iteration < 100 {
         iteration += 1;
@@ -266,7 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Phase 1: Bundle Construction
         for cbba in &mut cbbas {
-            let added = cbba.bundle_construction_phase()?;
+            let added = cbba.bundle_construction_phase(Some(&tasks))?;
             if !added.is_empty() {
                 any_change = true;
                 // info!("  {} added tasks: {}", cbba.agent, added);
@@ -286,7 +300,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Apply consensus / conflict resolution
         for cbba in &mut cbbas {
-            let dropped = cbba.consensus_phase(&all_messages)?;
+            let dropped = cbba.consensus_phase(&all_messages);
             if !dropped.is_empty() {
                 any_change = true;
                 cbba_log::log_dropped_tasks(cbba, &dropped);
@@ -300,7 +314,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Visualize this iteration
 
         // Visualize this iteration
-        visualize_iteration(iteration, &cbbas, &tasks, &result_dir, &config.viz)?;
+        render_visualization(
+            &result_dir.join(format!("iteration_{}.png", iteration)),
+            &format!("Iteration {}", iteration),
+            &cbbas,
+            &tasks,
+            &config.viz,
+        )?;
 
         // Print status for each agent at the end of the iteration
         cbba_log::log_iteration_status(&cbbas, iteration);

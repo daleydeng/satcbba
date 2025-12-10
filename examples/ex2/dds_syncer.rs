@@ -8,25 +8,32 @@
 //! 2. Collects agent status
 //! 3. Reports system status to Manager
 
-use cbbadds::{
-    dds::{
-        AgentPhase, ManagerCommand,
-        RequestFromSyncer, ReplyToManager, create_common_qos,
-        RequestFromManager, ReplyToSyncer
-    },
-    sat::{ExploreTask, load_satellites},
-};
-use cbbadds::consensus::types::AgentId;
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-use clap::Parser;
 use cbbadds::config::load_pkl;
+use cbbadds::consensus::types::AgentId;
+use cbbadds::sat::score::SatelliteScoreFunction;
+use cbbadds::sat::types::Satellite;
+use cbbadds::CBBA;
+use cbbadds::{
+    dds::{AgentCommand, AgentPhase, AgentReply, AgentStatus, create_common_qos},
+    sat::{
+        ExploreTask, generate_random_tasks, load_satellites, load_tasks, render_visualization,
+        save_satellites, save_tasks,
+    },
+};
+use chrono::Local;
+use clap::Parser;
 use futures::StreamExt;
 use rustdds::with_key::Sample;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use tokio::time::{Duration, Instant};
+use uuid::Uuid;
 
 #[path = "config.rs"]
 pub mod config;
-use config::Config;
+use config::{Config, SatSourceConfig, TaskSourceConfig};
 
 #[derive(Parser, Debug, Default)]
 #[command(author, version, about, long_about = None)]
@@ -34,6 +41,10 @@ pub struct Cli {
     /// Path to configuration file
     #[arg(long, default_value = "examples/ex2/config.pkl")]
     config: String,
+
+    /// When converged, send terminate command to agents
+    #[arg(long, default_value_t = false)]
+    terminate_agents: bool,
 }
 
 #[tokio::main]
@@ -41,211 +52,465 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let config_path = &cli.config;
     let config: Config = load_pkl(config_path)?;
-    run(config).await
+    run(config, cli.terminate_agents).await
 }
 
-
-use config::SatSourceConfig;
-
-pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    config: Config,
+    terminate_agents_on_convergence: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting DDS Syncer...");
 
-    // --- Load Data (for verification only) ---
-    let satellites = match &config.data.satellites {
+    // --- Prepare output directory ---
+    let output_dir = &config.output_config.dir;
+    let result_dir = if config.output_config.use_timestamp {
+        let date_str = Local::now()
+            .format(&config.output_config.timestamp_fmt)
+            .to_string();
+        Path::new(output_dir).join(date_str)
+    } else {
+        PathBuf::from(output_dir)
+    };
+    fs::create_dir_all(&result_dir)?;
+    println!("Results will be saved to: {}", result_dir.display());
+
+    // --- Load Satellites (for verification/output) ---
+    let _satellites = match &config.data.satellites {
         SatSourceConfig::Random(cfg) => {
-             cbbadds::sat::generate_random_satellites(cfg)
-        },
+            let sats = cbbadds::sat::generate_random_satellites(cfg);
+            let path = result_dir.join("satellites.json");
+            if let Err(e) = save_satellites(&sats, &path) {
+                println!("Warning: failed to save satellites: {e}");
+            }
+            sats
+        }
         SatSourceConfig::File(cfg) => {
-            load_satellites(Path::new(&cfg.path))?
+            let path = Path::new(&cfg.path);
+            let dest = result_dir.join("satellites.json");
+            if let Err(e) = fs::copy(path, &dest) {
+                println!(
+                    "Warning: failed to copy satellites file {} -> {}: {e}",
+                    path.display(),
+                    dest.display()
+                );
+            }
+            load_satellites(path)?
         }
     };
 
-    let _expected_agents: HashSet<AgentId> = satellites.iter().map(|s| s.id).collect();
-    let expected_count = config.dds.expected_agents;
-
-    println!("Configuration expects {} agents.", expected_count);
+    println!("Waiting for agents to come online via DDS discovery...");
 
     // --- DDS Setup ---
     let domain_id = config.dds.domain_id;
     let qos = create_common_qos();
-    let (network_writer, network_reader) = cbbadds::dds::transport::new_syncer_transport::<ExploreTask>(domain_id, qos);
+    let (network_writer, network_reader) = cbbadds::dds::transport::new_syncer_transport::<
+        CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
+        ExploreTask,
+    >(domain_id, qos);
     println!("Syncer Network Initialized");
 
     // --- Create Streams ---
-    let mut manager_stream = network_reader.manager_request_stream;
     let mut agent_status_stream = network_reader.agent_status_stream;
+    let mut agent_state_stream = network_reader.agent_state_stream;
     let mut reply_to_syncer_stream = network_reader.reply_to_syncer_stream;
+    let mut latest_states: HashMap<AgentId, CBBA<ExploreTask, Satellite, SatelliteScoreFunction>> =
+        HashMap::new();
 
     // --- Wait for Agents ---
-    println!("Waiting for agents to come online... (Expecting {} agents)", expected_count);
+    println!("Waiting for agents to respond to handshake...");
     let mut ready_agents = HashSet::new();
+    run_handshake(
+        &mut ready_agents,
+        &mut agent_status_stream,
+        &mut reply_to_syncer_stream,
+        &network_writer,
+        Duration::from_millis(config.dds.handshake_timeout_ms),
+    )
+    .await?;
 
-    // Loop until all agents are seen or Manager says Start (which might be risky if agents aren't ready)
-    // Actually, we should wait for agents to be "Initializing"
-
-    // We can also wait for a "Start" command from Manager to begin the actual sync loop
-    let _simulation_started = false;
-
-    // --- Main Event Loop ---
-    let mut current_iteration = 0;
-    let mut current_phase = AgentPhase::Initializing;
-    let mut waiting_for_completion = false;
-    let mut current_request_id: Option<String> = None;
-
-    let mut peer_replies: HashMap<AgentId, ReplyToSyncer> = HashMap::new();
-
-    loop {
-        tokio::select! {
-            // Handle Agent Status Updates
-            Some(result) = agent_status_stream.next() => {
-                let Ok(sample) = result else { continue };
-                let Sample::Value(msg) = sample.into_value() else { continue };
-
-                let agent_id = msg.agent_id;
-                let phase = msg.phase;
-
-                 // Track new agents
-                 if phase == AgentPhase::Initialized
-                    && ready_agents.insert(agent_id) {
-                        println!("Agent {} is ready. ({}/{})", agent_id, ready_agents.len(), expected_count);
-
-                        // Report status to Manager
-                        let reply = ReplyToManager {
-                            request_id: current_request_id.clone().unwrap_or_default(),
-                            success: true,
-                            message: "Agent Ready".to_string(),
-                            iteration: Some(current_iteration),
-                            phase: Some(current_phase),
-                            active_agents: Some(ready_agents.len() as u32),
-                            converged: None,
-                        };
-                        network_writer.publish_reply_to_manager(reply)?;
-                    }
+    // --- Load Tasks (shared across iterations) ---
+    let tasks = match &config.data.tasks {
+        TaskSourceConfig::Random(cfg) => {
+            println!("Generating {} random tasks", cfg.count);
+            let tasks = generate_random_tasks(cfg);
+            let path = result_dir.join("tasks.json");
+            if let Err(e) = save_tasks(&tasks, &path) {
+                println!("Warning: failed to save tasks: {e}");
             }
-
-            // Handle Agent Replies (Task Completion)
-            Some(result) = reply_to_syncer_stream.next() => {
-                 let Ok(sample) = result else { continue };
-                 let Sample::Value(msg) = sample.into_value() else { continue };
-
-                // Track agents from replies if not already known (implicit registration)
-                // In a real system, we'd want explicit registration, but for this simulation,
-                // we can infer presence from activity if needed, or rely on expected_count.
-                // Since we removed status stream, we don't see "Initializing" status anymore.
-                // We should assume agents are ready if they are replying, or just wait for expected_count of replies.
-                // However, "ready_agents" set is empty now because we removed the filling logic.
-                // We need to populate it.
-
-                ready_agents.insert(msg.agent_id);
-
-                // Check if this reply matches current request
-                let Some(req_id) = &current_request_id else { continue; };
-
-                if &msg.request_id != req_id {
-                    continue;
-                }
-                peer_replies.insert(msg.agent_id, msg.clone());
-
-                // Check completion
-                if !waiting_for_completion {
-                    continue;
-                }
-
-                let all_done = ready_agents.iter().all(|id| peer_replies.contains_key(id));
-
-                if !all_done {
-                    continue;
-                }
-                println!("Step finished: Iteration {} Phase {:?}", current_iteration, current_phase);
-                waiting_for_completion = false;
-
-                // Check Convergence
-                // Check has_changes based on phase payload
-                let any_changes = peer_replies.values().any(|r| {
-                    match r.phase {
-                        AgentPhase::BundleConstructionComplete(has_changes) => has_changes,
-                        AgentPhase::ConflictResolutionComplete(has_changes) => has_changes,
-                        _ => false,
-                    }
-                });
-
-                // Notify Manager
-                let reply = ReplyToManager {
-                    request_id: current_request_id.clone().unwrap_or_default(),
-                    success: true,
-                    message: "Phase Finished".to_string(),
-                    iteration: Some(current_iteration),
-                    phase: Some(current_phase),
-                    active_agents: Some(ready_agents.len() as u32),
-                    converged: Some(!any_changes),
-                };
-                network_writer.publish_reply_to_manager(reply)?;
-
-                // Clear replies for next step
-                peer_replies.clear();
+            tasks
+        }
+        TaskSourceConfig::File(cfg) => {
+            println!("Loading tasks from file: {}", cfg.path);
+            let path = Path::new(&cfg.path);
+            let dest = result_dir.join("tasks.json");
+            if let Err(e) = fs::copy(path, &dest) {
+                println!(
+                    "Warning: failed to copy tasks file {} -> {}: {e}",
+                    path.display(),
+                    dest.display()
+                );
             }
+            load_tasks(path)?
+        }
+    };
 
-            // Handle Manager Commands
-            Some(result) = manager_stream.next() => {
-                let Ok(sample) = result else { continue };
-                let msg = sample.into_value();
+    if tasks.is_empty() {
+        println!("No tasks available; exiting.");
+        return Ok(());
+    }
 
-                match msg {
-                    RequestFromManager::Command { id, command } => {
-                        current_request_id = Some(id.clone());
-                        match command {
-                            ManagerCommand::StartStep(instr) => {
-                                println!("Manager requested Step: Phase {:?}", instr.target_phase);
-                                // current_iteration = instr.iteration; // AgentInstruction no longer has iteration
-                                current_phase = match instr.target_phase {
-                                    cbbadds::dds::AgentRequestPhase::Initializing => cbbadds::dds::AgentPhase::Initializing,
-                                    cbbadds::dds::AgentRequestPhase::BundleConstruction => {
-                                        current_iteration += 1;
-                                        cbbadds::dds::AgentPhase::BundleConstruction
-                                    },
-                                    cbbadds::dds::AgentRequestPhase::ConflictResolution => cbbadds::dds::AgentPhase::ConflictResolution,
-                                };
-                                waiting_for_completion = true;
-                                peer_replies.clear(); // Clear old replies
+    // --- Iterative CBBA coordination over DDS ---
+    let max_iterations = config.dds.max_iterations;
+    let phase_timeout = Duration::from_millis(config.dds.handshake_timeout_ms);
+    let mut iteration = 0;
+    let mut converged = false;
 
-                                let _ = network_writer.publish_syncer_request(RequestFromSyncer::Instruction(instr));
-                            },
-                            ManagerCommand::Stop => {
-                                println!("Manager requested Stop. Stopping.");
-                                break;
-                            },
-                            ManagerCommand::Reset => {
-                                println!("Manager requested Reset.");
-                                current_iteration = 0;
-                                current_phase = AgentPhase::Initializing;
-                                waiting_for_completion = false;
-                                peer_replies.clear();
-                            },
-                            ManagerCommand::ClearTasks => {
-                                println!("Manager requested ClearTasks.");
-                                let msg = RequestFromSyncer::ClearTasks;
-                                if let Err(e) = network_writer.publish_syncer_request(msg) {
-                                        eprintln!("Error broadcasting ClearTasks: {:?}", e);
-                                }
-                            },
-                            ManagerCommand::Shutdown => {
-                                println!("Manager requested Shutdown. Exiting.");
-                                break;
-                            },
-                            _ => {}
-                        }
-                    }
-                    RequestFromManager::DistributeTasks { id: _, tasks } => {
-                            // Broadcast tasks to Agents
-                            let msg = RequestFromSyncer::ForwardTasks(tasks);
-                            if let Err(e) = network_writer.publish_syncer_request(msg) {
-                                eprintln!("Error broadcasting tasks: {:?}", e);
-                            }
-                    }
-                }
+    while iteration < max_iterations && !converged {
+        iteration += 1;
+        println!("--- Iteration {} ---", iteration);
+
+        let participants: HashSet<AgentId> = ready_agents.clone();
+        if participants.is_empty() {
+            println!("No participating agents; stopping iterations.");
+            break;
+        }
+
+        // Phase 1: Bundle Construction
+        let bundle_request_id = format!("bundle-{}-{}", iteration, Uuid::new_v4());
+        network_writer.publish_syncer_request(AgentCommand::BundlingConstruction {
+            request_id: bundle_request_id.clone(),
+            tasks: Some(tasks.clone()),
+        })
+            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+
+        let bundle_deadline = Instant::now() + phase_timeout;
+        let bundle_replies = collect_phase_replies(
+            &bundle_request_id,
+            &participants,
+            &mut ready_agents,
+            &mut agent_status_stream,
+            &mut agent_state_stream,
+            &mut latest_states,
+            &mut reply_to_syncer_stream,
+            bundle_deadline,
+        )
+        .await;
+
+        let bundle_changed = bundle_replies.values().any(|r| match &r.phase {
+            AgentPhase::BundlingConstructingComplete(added) => !added.is_empty(),
+            _ => false,
+        });
+
+        if !latest_states.is_empty() {
+            let cbba_states: Vec<_> = latest_states.values().cloned().collect();
+            let filename = result_dir.join(format!("iter_{:02}_bundle.png", iteration));
+            if let Err(e) = render_visualization(
+                &filename,
+                &format!("Iteration {} (bundle)", iteration),
+                &cbba_states,
+                &tasks,
+                &config.viz,
+            ) {
+                println!("Warning: failed to visualize bundle stage: {e}");
             }
+        }
+
+        // Phase 2: Conflict Resolution
+        let conflict_request_id = format!("conflict-{}-{}", iteration, Uuid::new_v4());
+        network_writer.publish_syncer_request(AgentCommand::ConflictResolution {
+            request_id: conflict_request_id.clone(),
+            messages: None,
+        })
+            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+
+        let conflict_deadline = Instant::now() + phase_timeout;
+        let conflict_replies = collect_phase_replies(
+            &conflict_request_id,
+            &participants,
+            &mut ready_agents,
+            &mut agent_status_stream,
+            &mut agent_state_stream,
+            &mut latest_states,
+            &mut reply_to_syncer_stream,
+            conflict_deadline,
+        )
+        .await;
+
+        let conflict_changed = conflict_replies.values().any(|r| match &r.phase {
+            AgentPhase::ConflictResolvingComplete(released) => !released.is_empty(),
+            _ => false,
+        });
+
+        if !latest_states.is_empty() {
+            let cbba_states: Vec<_> = latest_states.values().cloned().collect();
+            let filename = result_dir.join(format!("iter_{:02}_consensus.png", iteration));
+            if let Err(e) = render_visualization(
+                &filename,
+                &format!("Iteration {} (consensus)", iteration),
+                &cbba_states,
+                &tasks,
+                &config.viz,
+            ) {
+                println!("Warning: failed to visualize consensus stage: {e}");
+            }
+        }
+
+        let missing_bundle = participants
+            .iter()
+            .filter(|id| !bundle_replies.contains_key(id))
+            .count();
+        let missing_conflict = participants
+            .iter()
+            .filter(|id| !conflict_replies.contains_key(id))
+            .count();
+
+        if missing_bundle > 0 || missing_conflict > 0 {
+            println!(
+                "Iteration {} incomplete: missing {} bundle replies, {} conflict replies.",
+                iteration, missing_bundle, missing_conflict
+            );
+        }
+
+        if !bundle_changed && !conflict_changed && missing_bundle == 0 && missing_conflict == 0 {
+            println!("Converged after {} iteration(s).", iteration);
+            converged = true;
         }
     }
 
+    if !converged {
+        println!("Reached max iterations without convergence.");
+    } else if terminate_agents_on_convergence {
+        println!("Converged; sending terminate command to agents.");
+        let terminate_request_id = format!("terminate-{}", Uuid::new_v4());
+        network_writer
+            .publish_syncer_request(AgentCommand::Terminate {
+                request_id: terminate_request_id.clone(),
+            })
+            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+
+        println!("Awaiting agent termination acknowledgements...");
+        await_agent_termination(
+            &ready_agents,
+            &mut agent_status_stream,
+            &mut reply_to_syncer_stream,
+            phase_timeout,
+            &terminate_request_id,
+        )
+        .await;
+    }
+
+    // Save a visualization of the final assignment if we have states
+    if !latest_states.is_empty() {
+        let cbba_states: Vec<_> = latest_states.values().cloned().collect();
+        let filename = result_dir.join(format!("iteration_{}.png", iteration));
+        if let Err(e) = render_visualization(
+            &filename,
+            &format!("Iteration {}", iteration),
+            &cbba_states,
+            &tasks,
+            &config.viz,
+        ) {
+            println!("Warning: failed to visualize final iteration: {e}");
+        }
+    }
+
+    println!("Syncer iterations finished.");
+
     Ok(())
+}
+
+async fn run_handshake(
+    ready_agents: &mut HashSet<AgentId>,
+    agent_status_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
+    reply_to_syncer_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
+    network_writer: &cbbadds::dds::transport::SyncerWriter<
+        ExploreTask,
+        CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
+    >,
+    timeout: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let handshake_request_id = format!("sync-init-{}", Uuid::new_v4());
+    println!(
+        "Broadcasting initialization request (timeout {:?}) to discover agents...",
+        timeout
+    );
+
+    network_writer
+        .publish_syncer_request(AgentCommand::Initialization {
+            request_id: handshake_request_id.clone(),
+            state: None,
+        })
+        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        if Instant::now() >= deadline {
+            break;
+        }
+
+        let sleep = tokio::time::sleep_until(deadline);
+        tokio::pin!(sleep);
+
+        tokio::select! {
+            _ = &mut sleep => {
+                break;
+            }
+            Some(result) = reply_to_syncer_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(msg) = sample.into_value() else { continue };
+                if msg.request_id == handshake_request_id {
+                    if ready_agents.insert(msg.agent_id) {
+                        println!(
+                            "Agent {} responded to handshake. Discovered {} agent(s).",
+                            msg.agent_id,
+                            ready_agents.len()
+                        );
+                    }
+                } else {
+                    let _ = ready_agents.insert(msg.agent_id);
+                    println!(
+                        "Received reply for request {} during handshake; agent {} marked as present ({} discovered).",
+                        msg.request_id,
+                        msg.agent_id,
+                        ready_agents.len()
+                    );
+                    // For now we simply record the agent as present; main loop will process future actions.
+                }
+            }
+            Some(result) = agent_status_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(msg) = sample.into_value() else { continue };
+                if msg.phase == AgentPhase::Initialized && ready_agents.insert(msg.agent_id) {
+                    println!(
+                        "Agent {} responded to handshake. Discovered {} agent(s).",
+                        msg.agent_id,
+                        ready_agents.len()
+                    );
+                }
+            }
+            else => break,
+        }
+    }
+
+    if ready_agents.is_empty() {
+        println!(
+            "Handshake timed out after {:?}; proceeding with zero registered agents.",
+            timeout
+        );
+    } else {
+        println!("Handshake complete: {} agent(s) ready.", ready_agents.len());
+    }
+
+    Ok(())
+}
+
+async fn collect_phase_replies(
+    request_id: &str,
+    expected_agents: &HashSet<AgentId>,
+    ready_agents: &mut HashSet<AgentId>,
+    agent_status_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
+    agent_state_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
+    latest_states: &mut HashMap<AgentId, CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
+    reply_to_syncer_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
+    deadline: Instant,
+) -> HashMap<AgentId, AgentReply> {
+    let mut replies = HashMap::new();
+
+    loop {
+        if Instant::now() >= deadline {
+            break;
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+
+        tokio::select! {
+            _ = tokio::time::sleep(remaining) => {
+                break;
+            }
+            Some(result) = reply_to_syncer_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(msg) = sample.into_value() else { continue };
+                ready_agents.insert(msg.agent_id);
+                if msg.request_id != request_id {
+                    continue;
+                }
+                replies.insert(msg.agent_id, msg);
+                if expected_agents.iter().all(|id| replies.contains_key(id)) {
+                    break;
+                }
+            }
+            Some(result) = agent_status_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(msg) = sample.into_value() else { continue };
+                ready_agents.insert(msg.agent_id);
+            }
+            Some(result) = agent_state_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(state) = sample.into_value() else { continue };
+                latest_states.insert(state.agent.id, state);
+            }
+            else => break,
+        }
+    }
+
+    replies
+}
+
+async fn await_agent_termination(
+    ready_agents: &HashSet<AgentId>,
+    agent_status_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
+    reply_to_syncer_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
+    timeout: Duration,
+    terminate_request_id: &str,
+) {
+    if ready_agents.is_empty() {
+        println!("No agents to await termination.");
+        return;
+    }
+
+    let mut terminated: HashSet<AgentId> = HashSet::new();
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if terminated.len() == ready_agents.len() {
+            println!("All agents reported termination.");
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            let missing = ready_agents.len().saturating_sub(terminated.len());
+            println!("Termination wait timed out; missing {missing} agent(s).");
+            break;
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+
+        tokio::select! {
+            _ = tokio::time::sleep(remaining) => {
+                let missing = ready_agents.len().saturating_sub(terminated.len());
+                if missing > 0 {
+                    println!("Termination wait timed out; missing {missing} agent(s).");
+                }
+                break;
+            }
+            Some(result) = reply_to_syncer_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(msg) = sample.into_value() else { continue };
+                if msg.request_id == terminate_request_id {
+                    terminated.insert(msg.agent_id);
+                }
+            }
+            Some(result) = agent_status_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(msg) = sample.into_value() else { continue };
+                match msg.phase {
+                    AgentPhase::Terminating | AgentPhase::Standby => {
+                        terminated.insert(msg.agent_id);
+                    }
+                    _ => {}
+                }
+            }
+            else => break,
+        }
+    }
 }

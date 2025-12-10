@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use super::types::{ExploreTask, Satellite};
-use super::utils::{haversine_km, deg_from_e6};
+use super::utils::{deg_from_e6, haversine_km};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct SatelliteScoreFunction;
@@ -10,17 +10,14 @@ use crate::consensus::types::Score;
 impl crate::cbaa::ScoreFunction<ExploreTask, Satellite> for SatelliteScoreFunction {
     fn check(&self, agent: &Satellite, task: &ExploreTask) -> bool {
         if let Some(allowed) = &task.allowed_satellites
-            && !allowed.contains(&agent.id) {
-                return false;
-            }
+            && !allowed.contains(&agent.id)
+        {
+            return false;
+        }
         true
     }
 
-    fn calc(
-        &self,
-        agent: &Satellite,
-        task: &ExploreTask,
-    ) -> Score {
+    fn calc(&self, agent: &Satellite, task: &ExploreTask) -> Score {
         let lat_a = deg_from_e6(agent.lat_e6);
         let lon_a = deg_from_e6(agent.lon_e6);
         let lat_t = deg_from_e6(task.lat_e6);
@@ -42,17 +39,14 @@ impl crate::cbaa::ScoreFunction<ExploreTask, Satellite> for SatelliteScoreFuncti
 impl crate::cbba::ScoreFunction<ExploreTask, Satellite> for SatelliteScoreFunction {
     fn check(&self, agent: &Satellite, task: &ExploreTask) -> bool {
         if let Some(allowed) = &task.allowed_satellites
-            && !allowed.contains(&agent.id) {
-                return false;
-            }
+            && !allowed.contains(&agent.id)
+        {
+            return false;
+        }
         true
     }
 
-    fn calc_path(
-        &self,
-        agent: &Satellite,
-        path: &[ExploreTask],
-    ) -> Vec<Score> {
+    fn calc_path(&self, agent: &Satellite, path: &[ExploreTask]) -> Vec<Score> {
         let mut scores = Vec::with_capacity(path.len());
         let mut current_time_hours = 0.0;
         let mut current_lat = deg_from_e6(agent.lat_e6);

@@ -1,9 +1,8 @@
-use std::process::Command;
-use std::path::Path;
+use anyhow::{Context, Result, anyhow};
 use serde::de::DeserializeOwned;
+use std::path::Path;
+use std::process::Command;
 use tracing::error;
-use anyhow::{Result, anyhow, Context};
-
 
 pub fn load_pkl<T: DeserializeOwned>(config_path: impl AsRef<Path>) -> Result<T> {
     let config_path = config_path.as_ref();
@@ -23,10 +22,7 @@ pub fn load_pkl<T: DeserializeOwned>(config_path: impl AsRef<Path>) -> Result<T>
 
     let json_str = String::from_utf8_lossy(&output.stdout);
 
-    let config: T = serde_json::from_str(&json_str)
-        .context("Failed to parse config json")?;
+    let config: T = serde_json::from_str(&json_str).context("Failed to parse config json")?;
 
     Ok(config)
 }
-
-

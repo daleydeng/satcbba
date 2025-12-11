@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .try_init();
     info!("[Syncer] Starting Syncer (ex3 ping/pong)...");
 
-    let domain_id = 0u16;
+    let domain_id = 42u16;
     let qos = create_common_qos();
 
     // Use transport helper to get writers/readers
@@ -75,31 +75,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match agent_res {
                         Some(Ok(sample)) => {
                             debug!("[Syncer] Received sample: {:?}", sample);
-                            if let rustdds::with_key::Sample::Value(ev) = sample.into_value() {
-                                debug!("[Syncer] Sample value: event_type={}, from agent_id={:?}", ev.event_type, ev.agent_id);
-                                if ev.event_type == "pong" {
-                                    match serde_json::from_slice::<serde_json::Value>(&ev.data) {
-                                        Ok(v) => info!("[Syncer] Pong data: {}", v),
-                                        Err(e) => error!("[Syncer] ERROR decoding pong data: {:?}", e),
-                                    }
+                            let ev = sample.into_value();
+                            debug!("[Syncer] Sample value: event_type={}", ev.event_type);
+                            if ev.event_type == "pong" {
+                                match serde_json::from_slice::<serde_json::Value>(&ev.data) {
+                                    Ok(v) => info!("[Syncer] Pong data: {}", v),
+                                    Err(e) => error!("[Syncer] ERROR decoding pong data: {:?}", e),
                                 }
                             }
                         }
                         Some(Err(e)) => error!("[Syncer] ERROR reading sample: {:?}", e),
-                        None => debug!("[Syncer] No more samples (stream ended)"),
+                        _ => debug!("[Syncer] No more samples (stream ended)"),
                     }
                 }
                 status = writer_status_stream.next() => {
                     match status {
                         Some(s) => debug!("[Syncer][WriterStatus] {:?}", s),
-                        None => debug!("[Syncer][WriterStatus] stream ended"),
+                        _ => debug!("[Syncer][WriterStatus] stream ended"),
                     }
                 }
                 // Reader lifecycle/status events
                 reader_evt = agent_event_stream.next() => {
                     match reader_evt {
                         Some(evt) => debug!("[Syncer][ReaderEvent] {:?}", evt),
-                        None => debug!("[Syncer][ReaderEvent] stream ended"),
+                        _ => debug!("[Syncer][ReaderEvent] stream ended"),
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {}

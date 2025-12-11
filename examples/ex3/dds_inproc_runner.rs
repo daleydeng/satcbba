@@ -4,11 +4,12 @@ use serde_json::json;
 
 use cbbadds::consensus::types::AgentId;
 use cbbadds::dds::transport::{new_agent_transport, new_syncer_transport};
-use cbbadds::dds::types::{AgentEvent, AgentStatus, Event};
+use cbbadds::dds::types::{AgentStatus, Event};
 use cbbadds::dds::utils::create_common_qos;
 
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::info;
+use tokio::time::timeout;
+use tracing::{error, info};
 use tracing_subscriber;
 
 async fn run_syncer() {
@@ -37,13 +38,24 @@ async fn run_syncer() {
 
         let start = tokio::time::Instant::now();
         while tokio::time::Instant::now() - start < tokio::time::Duration::from_secs(3) {
-            if let Some(Ok(sample)) = agent_stream.next().await {
-                if let rustdds::with_key::Sample::Value(ev) = sample.into_value() {
+            match timeout(tokio::time::Duration::from_millis(100), agent_stream.next()).await {
+                Ok(Some(Ok(sample))) => {
+                    let ev = sample.into_value();
                     if ev.event_type == "pong" {
                         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&ev.data) {
                             info!("[Inproc Syncer] Pong: {}", v);
                         }
                     }
+                }
+                Ok(Some(Err(e))) => {
+                    error!("[Inproc Syncer] Error reading sample: {:?}", e);
+                }
+                Ok(None) => {
+                    // Stream ended
+                    break;
+                }
+                Err(_) => {
+                    // Timeout, continue loop
                 }
             }
         }
@@ -68,34 +80,38 @@ async fn run_agent(agent_id: u32) {
     loop {
         tokio::select! {
             syncer_res = syncer_stream.next() => {
-                if let Some(Ok(sample)) = syncer_res {
-                    let ev = sample.into_value();
-                    if ev.event_type == "ping" {
-                        // extract ping_id if present so we echo it back with the pong
-                        let ping_id = serde_json::from_slice::<serde_json::Value>(&ev.data)
-                            .ok()
-                            .and_then(|v| v.get("ping_id").and_then(|x| x.as_u64()))
-                            .unwrap_or(0);
-                        let payload = json!({"agent_id": agent_id, "ping_id": ping_id, "peer_pongs": peer_pongs});
-                        let bytes = serde_json::to_vec(&payload).unwrap();
-                        let pong = AgentEvent { agent_id: AgentId(agent_id), event_type: "pong".to_string(), data: bytes };
-                        let _ = agent_writer.publish_agent_event(pong);
-                        info!("[Inproc Agent {}] Sent pong ({} peers) for ping {}", agent_id, peer_pongs.len(), ping_id);
+                match syncer_res {
+                    Some(Ok(sample)) => {
+                        let ev = sample.into_value();
+                        info!("[Inproc Agent {}] Received SyncerEvent: {}", agent_id, ev.event_type);
+                        if ev.event_type == "ping" {
+                            // extract ping_id if present so we echo it back with the pong
+                            let ping_id = serde_json::from_slice::<serde_json::Value>(&ev.data)
+                                .ok()
+                                .and_then(|v| v.get("ping_id").and_then(|x| x.as_u64()))
+                                .unwrap_or(0);
+                            let payload = json!({"agent_id": agent_id, "ping_id": ping_id, "peer_pongs": peer_pongs});
+                            let bytes = serde_json::to_vec(&payload).unwrap();
+                            let pong = Event { event_type: "pong".to_string(), data: bytes };
+                            let _ = agent_writer.publish_agent_event(pong);
+                            info!("[Inproc Agent {}] Sent pong ({} peers) for ping {}", agent_id, peer_pongs.len(), ping_id);
+                        }
                     }
+                    Some(Err(e)) => error!("[Inproc Agent {}] Error reading syncer stream: {:?}", agent_id, e),
+                    None => info!("[Inproc Agent {}] Syncer stream ended", agent_id),
                 }
             }
 
             agent_res = agent_stream.next() => {
                 if let Some(Ok(sample)) = agent_res {
-                    if let rustdds::with_key::Sample::Value(ev) = sample.into_value() {
-                        if ev.event_type == "pong" {
-                            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&ev.data) {
-                                if let Some(id) = v.get("agent_id").and_then(|x| x.as_u64()) {
-                                        if id as u32 != agent_id {
-                                            peer_pongs.push(format!("agent:{}", id));
-                                            info!("[Inproc Agent {}] Heard peer pong from {}", agent_id, id);
-                                        }
-                                }
+                    let ev = sample.into_value();
+                    if ev.event_type == "pong" {
+                        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&ev.data) {
+                            if let Some(id) = v.get("agent_id").and_then(|x| x.as_u64()) {
+                                    if id as u32 != agent_id {
+                                        peer_pongs.push(format!("agent:{}", id));
+                                        info!("[Inproc Agent {}] Heard peer pong from {}", agent_id, id);
+                                    }
                             }
                         }
                     }
@@ -111,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("info,rustdds=warn,rustdds::rtps=warn")
+                tracing_subscriber::EnvFilter::new("info")
             }),
         )
         .try_init();
@@ -123,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tasks.push(tokio::spawn(run_agent(i)));
     }
     // small delay to allow agents to create readers
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     tasks.push(tokio::spawn(run_syncer()));
 
     let _ = join_all(tasks).await;

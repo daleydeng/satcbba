@@ -3,7 +3,7 @@ use crate::consensus::types::Agent;
 use crate::consensus::types::{AgentId, ConsensusMessage, Task};
 use crate::dds::types::{
     AGENT_COMMAND_TOPIC, AGENT_CONSENSUS_TOPIC, AGENT_EVENT_TOPIC, AGENT_REPLY_TOPIC,
-    AGENT_STATE_TOPIC, AGENT_STATUS_TOPIC, AgentCommand, AgentEvent, AgentPhase, AgentReply,
+    AGENT_STATE_TOPIC, AGENT_STATUS_TOPIC, AgentCommand, AgentPhase, AgentReply,
     AgentStatus, Event, LOG_TOPIC, LogMessage, SYNCER_EVENT_TOPIC,
 };
 use crate::dds::utils::create_topic;
@@ -42,7 +42,7 @@ where
     pub status_writer: KeyedDdsDataWriter<AgentStatus>,
     pub consensus_writer: KeyedDdsDataWriter<ConsensusMessage>,
     pub reply_to_syncer_writer: KeyedDdsDataWriter<AgentReply>,
-    pub agent_event_writer: KeyedDdsDataWriter<AgentEvent>,
+    pub agent_event_writer: DdsDataWriter<Event>,
     pub log_writer: DdsDataWriter<LogMessage>,
     agent_id: AgentId,
     _participant: DomainParticipant,
@@ -87,7 +87,7 @@ where
             .map_err(|e| Error::NetworkError(format!("DDS Write Error: {:?}", e)))
     }
 
-    pub fn publish_agent_event(&self, event: AgentEvent) -> Result<(), Error> {
+    pub fn publish_agent_event(&self, event: Event) -> Result<(), Error> {
         self.agent_event_writer
             .write(event, None)
             .map_err(|e| Error::NetworkError(format!("DDS AgentEvent Write Error: {:?}", e)))
@@ -103,7 +103,7 @@ where
     pub syncer_request_stream: DataReaderStream<AgentCommand<T, ConsensusMessage, S>>,
     pub peer_consensus_stream: KeyedDdsDataReaderStream<ConsensusMessage>,
     pub syncer_event_stream: DdsDataReaderStream<Event>,
-    pub peer_agent_event_stream: KeyedDdsDataReaderStream<AgentEvent>,
+    pub peer_agent_event_stream: DdsDataReaderStream<Event>,
 }
 
 pub fn new_agent_transport<S, T>(
@@ -174,9 +174,9 @@ where
     let agent_event_topic = create_topic(
         &participant,
         AGENT_EVENT_TOPIC,
-        "AgentEvent",
+        "Event",
         Some(&qos),
-        TopicKind::WithKey,
+        TopicKind::NoKey,
     );
 
     let log_topic = create_topic(
@@ -189,56 +189,56 @@ where
 
     // Writers
     let state_writer = publisher
-        .create_datawriter::<S, CDRSerializerAdapter<S>>(&agent_state_topic, None)
+        .create_datawriter(&agent_state_topic, None)
         .expect("Create state writer failed");
     let status_writer = publisher
-        .create_datawriter::<AgentStatus, CDRSerializerAdapter<AgentStatus>>(
+        .create_datawriter(
             &agent_status_topic,
             None,
         )
         .expect("Create status writer failed");
     let consensus_writer = publisher
-        .create_datawriter::<ConsensusMessage, CDRSerializerAdapter<ConsensusMessage>>(
+        .create_datawriter(
             &agent_consensus_topic,
             None,
         )
         .expect("Create consensus writer failed");
     let reply_to_syncer_writer = publisher
-        .create_datawriter::<AgentReply, CDRSerializerAdapter<AgentReply>>(
+        .create_datawriter(
             &syncer_reply_topic,
             None,
         )
         .expect("Create reply to syncer writer failed");
 
     let agent_event_writer = publisher
-        .create_datawriter::<AgentEvent, CDRSerializerAdapter<AgentEvent>>(&agent_event_topic, None)
+        .create_datawriter_no_key(&agent_event_topic, None)
         .expect("Create agent event writer failed");
 
     let log_writer = publisher
-        .create_datawriter_no_key::<LogMessage, CDRSerializerAdapter<LogMessage>>(&log_topic, None)
+        .create_datawriter_no_key(&log_topic, None)
         .expect("Create log writer failed");
 
     // Readers
     let peer_consensus_reader = subscriber
-        .create_datareader::<ConsensusMessage, CDRDeserializerAdapter<ConsensusMessage>>(
+        .create_datareader(
             &agent_consensus_topic,
             None,
         )
         .expect("Create peer consensus reader failed");
 
     let syncer_request_reader = subscriber
-        .create_datareader_no_key::<AgentCommand<T, ConsensusMessage, S>, CDRDeserializerAdapter<AgentCommand<T, ConsensusMessage, S>>>(
+        .create_datareader_no_key(
             &syncer_request_topic,
             None,
         )
         .expect("Create syncer request reader failed");
 
     let syncer_event_reader = subscriber
-        .create_datareader_no_key::<Event, CDRDeserializerAdapter<Event>>(&syncer_event_topic, None)
+        .create_datareader_no_key(&syncer_event_topic, None)
         .expect("Create syncer event reader failed");
 
     let peer_agent_event_reader = subscriber
-        .create_datareader::<AgentEvent, CDRDeserializerAdapter<AgentEvent>>(
+        .create_datareader_no_key(
             &agent_event_topic,
             None,
         )
@@ -319,7 +319,7 @@ where
     pub agent_state_stream: KeyedDdsDataReaderStream<S>,
     pub agent_status_stream: KeyedDdsDataReaderStream<AgentStatus>,
     pub reply_to_syncer_stream: KeyedDdsDataReaderStream<AgentReply>,
-    pub agent_event_stream: KeyedDdsDataReaderStream<AgentEvent>,
+    pub agent_event_stream: DdsDataReaderStream<Event>,
 }
 
 /// DDS-based network handler implementation for Syncer
@@ -355,9 +355,9 @@ where
     let agent_event_topic = create_topic(
         &participant,
         AGENT_EVENT_TOPIC,
-        "AgentEvent",
+        "Event",
         Some(&qos),
-        TopicKind::WithKey,
+        TopicKind::NoKey,
     );
     // Manager reply topic removed; Syncer coordinates without Manager.
     let agent_status_topic = create_topic(
@@ -389,37 +389,37 @@ where
         TopicKind::WithKey,
     );
 
-    let syncer_request_writer = publisher.create_datawriter_no_key::<AgentCommand<T, ConsensusMessage, S>, CDRSerializerAdapter<AgentCommand<T, ConsensusMessage, S>>>(&syncer_topic, None)
+    let syncer_request_writer = publisher.create_datawriter_no_key(&syncer_topic, None)
         .expect("Create syncer writer failed");
 
     let syncer_event_writer = publisher
-        .create_datawriter_no_key::<Event, CDRSerializerAdapter<Event>>(&syncer_event_topic, None)
+        .create_datawriter_no_key(&syncer_event_topic, None)
         .expect("Create syncer event writer failed");
 
     let log_writer = publisher
-        .create_datawriter_no_key::<LogMessage, CDRSerializerAdapter<LogMessage>>(&log_topic, None)
+        .create_datawriter_no_key(&log_topic, None)
         .expect("Create log writer failed");
 
     let agent_status_reader = subscriber
-        .create_datareader::<AgentStatus, CDRDeserializerAdapter<AgentStatus>>(
+        .create_datareader(
             &agent_status_topic,
             None,
         )
         .expect("Create agent status reader failed");
 
     let agent_state_reader = subscriber
-        .create_datareader::<S, CDRDeserializerAdapter<S>>(&agent_state_topic, None)
+        .create_datareader(&agent_state_topic, None)
         .expect("Create agent state reader failed");
 
     let reply_to_syncer_reader = subscriber
-        .create_datareader::<AgentReply, CDRDeserializerAdapter<AgentReply>>(
+        .create_datareader(
             &syncer_reply_topic,
             None,
         )
         .expect("Create reply to syncer reader failed");
 
     let agent_event_reader = subscriber
-        .create_datareader::<AgentEvent, CDRDeserializerAdapter<AgentEvent>>(
+        .create_datareader_no_key(
             &agent_event_topic,
             None,
         )

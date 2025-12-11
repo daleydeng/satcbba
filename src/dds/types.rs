@@ -12,25 +12,6 @@ pub const LOG_TOPIC: &str = "SystemLog";
 pub const AGENT_EVENT_TOPIC: &str = "AgentEvent";
 pub const SYNCER_EVENT_TOPIC: &str = "SyncerEvent";
 
-// --- Common / Shared Types ---
-
-
-/// Agent Phase for Replies/Status (from Agent)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum AgentPhase {
-    #[default]
-    Standby,
-    Initializing,
-    Initialized,
-    BundlingConstructing,
-    BundlingConstructingComplete(AddedTasks), 
-    ConflictResolving,
-    ConflictResolvingComplete(ReleasedTasks), 
-    Terminating,
-}
-
-/// Log Message for centralized logging
-/// Direction: All -> Manager
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogMessage {
     pub timestamp: Timestamp,
@@ -47,38 +28,6 @@ pub struct Event {
     pub event_type: String,
     /// Opaque binary payload
     pub data: Vec<u8>,
-}
-
-/// Keyed AgentEvent carries an `AgentId` as the key so agents can publish keyed events
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentEvent {
-    pub agent_id: AgentId,
-    pub event_type: String,
-    pub data: Vec<u8>,
-}
-
-impl Keyed for AgentEvent {
-    type K = u32;
-    fn key(&self) -> Self::K {
-        self.agent_id.0
-    }
-}
-
-// --- DDS Message Payloads ---
-
-/// Agent Status Message (formerly SyncMessage)
-/// Direction: Agent -> Syncer & Manager
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentStatus {
-    pub agent_id: AgentId,
-    pub phase: AgentPhase,
-}
-
-impl Keyed for AgentStatus {
-    type K = u32;
-    fn key(&self) -> Self::K {
-        self.agent_id.0
-    }
 }
 
 /// Commands sent from Syncer to Agents
@@ -104,6 +53,34 @@ pub enum AgentCommand<T, M, S> {
     },
 }
 
+
+/// Agent Phase for Replies/Status (from Agent)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AgentPhase {
+    #[default]
+    Standby,
+    Initializing,
+    Initialized,
+    BundlingConstructing,
+    BundlingConstructingComplete(AddedTasks),
+    ConflictResolving,
+    ConflictResolvingComplete(ReleasedTasks),
+    Terminating,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStatus {
+    pub agent_id: AgentId,
+    pub phase: AgentPhase,
+}
+
+impl Keyed for AgentStatus {
+    type K = u32;
+    fn key(&self) -> Self::K {
+        self.agent_id.0
+    }
+}
+
 /// Reply to Syncer from Agents
 /// Topic: AGENT_REPLY_TOPIC
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,3 +97,6 @@ impl Keyed for AgentReply {
         self.agent_id.0
     }
 }
+
+
+

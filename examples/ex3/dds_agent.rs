@@ -1,10 +1,9 @@
 use cbbadds::consensus::types::AgentId;
 use cbbadds::dds::transport::new_agent_transport;
-use cbbadds::dds::types::{AgentEvent, AgentStatus};
+use cbbadds::dds::types::{AgentStatus, Event};
 use cbbadds::dds::utils::create_common_qos;
 use futures::StreamExt;
 use rustdds::StatusEvented;
-use rustdds::with_key::Sample;
 use serde_json::json;
 use std::env;
 use tokio;
@@ -26,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("[Agent {}] Starting Agent...", agent_id);
 
-    let domain_id = 0u16;
+    let domain_id = 42u16;
     let qos = create_common_qos();
 
     debug!("[Agent {}] Creating transport...", agent_id);
@@ -73,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "peer_pongs": peer_pongs,
                             });
                             let bytes = serde_json::to_vec(&payload)?;
-                            let pong = AgentEvent { agent_id: AgentId(agent_id), event_type: "pong".to_string(), data: bytes };
+                            let pong = Event { event_type: "pong".to_string(), data: bytes };
                             match agent_writer.publish_agent_event(pong) {
                                 Ok(_) => info!("[Agent {}] Sent pong (including {} peer pongs)", agent_id, peer_pongs.len()),
                                 Err(e) => error!("[Agent {}] ERROR sending pong: {:?}", agent_id, e),
@@ -81,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Some(Err(e)) => error!("[Agent {}] ERROR reading SyncerEvent sample: {:?}", agent_id, e),
-                    None => debug!("[Agent {}] No more SyncerEvent samples (stream ended)", agent_id),
+                    _ => debug!("[Agent {}] No more SyncerEvent samples (stream ended)", agent_id),
                 }
             }
 
@@ -89,22 +88,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match agent_res {
                     Some(Ok(sample)) => {
                         debug!("[Agent {}] Received AgentEvent sample: {:?}", agent_id, sample);
-                        if let Sample::Value(ev) = sample.into_value() {
-                            debug!("[Agent {}] AgentEvent value: event_type={}, from agent_id={:?}", agent_id, ev.event_type, ev.agent_id);
-                            if ev.event_type == "pong" {
-                                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&ev.data) {
-                                    if let Some(id) = v.get("agent_id").and_then(|x| x.as_u64()) {
-                                        if id as u32 != agent_id {
-                                            peer_pongs.push(format!("agent:{}", id));
-                                            info!("[Agent {}] Heard peer pong from {}", agent_id, id);
-                                        }
+                        let ev = sample.into_value();
+                        debug!("[Agent {}] AgentEvent value: event_type={}", agent_id, ev.event_type);
+                        if ev.event_type == "pong" {
+                            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&ev.data) {
+                                if let Some(id) = v.get("agent_id").and_then(|x| x.as_u64()) {
+                                    if id as u32 != agent_id {
+                                        peer_pongs.push(format!("agent:{}", id));
+                                        info!("[Agent {}] Heard peer pong from {}", agent_id, id);
                                     }
                                 }
                             }
                         }
                     }
                     Some(Err(e)) => error!("[Agent {}] ERROR reading AgentEvent sample: {:?}", agent_id, e),
-                    None => debug!("[Agent {}] No more AgentEvent samples (stream ended)", agent_id),
+                    _ => debug!("[Agent {}] No more AgentEvent samples (stream ended)", agent_id),
                 }
             }
 
@@ -112,21 +110,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             status = writer_status_stream.next() => {
                 match status {
                     Some(s) => debug!("[Agent {}][WriterStatus] {:?}", agent_id, s),
-                    None => debug!("[Agent {}][WriterStatus] stream ended", agent_id),
+                    _ => debug!("[Agent {}][WriterStatus] stream ended", agent_id),
                 }
             }
             // Reader events (lifecycle/status of the reader)
             reader_evt = agent_event_stream.next() => {
                 match reader_evt {
                     Some(evt) => debug!("[Agent {}][ReaderEvent] {:?}", agent_id, evt),
-                    None => debug!("[Agent {}][ReaderEvent] stream ended", agent_id),
+                    _ => debug!("[Agent {}][ReaderEvent] stream ended", agent_id),
                 }
             }
             // Syncer reader events (debug)
             syncer_evt = syncer_event_stream.next() => {
                 match syncer_evt {
                     Some(evt) => debug!("[Agent {}][SyncerReaderEvent] {:?}", agent_id, evt),
-                    None => debug!("[Agent {}][SyncerReaderEvent] stream ended", agent_id),
+                    _ => debug!("[Agent {}][SyncerReaderEvent] stream ended", agent_id),
                 }
             }
         }

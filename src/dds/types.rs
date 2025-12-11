@@ -32,23 +32,24 @@ pub struct Event {
 
 /// Commands sent from Syncer to Agents
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AgentCommand<T, M, S> {
-    Initialization {
-        request_id: String,
-        state: Option<S>,
-    },
+pub struct AgentCommand<T, M, S> {
+    pub request_id: String,
+    /// None -> broadcast; Some(vec) -> targeted recipients
+    pub recipients: Option<Vec<AgentId>>,
+    pub payload: AgentCommandPayload<T, M, S>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AgentCommandPayload<T, M, S> {
+    Initialization { state: Option<S> },
+    /// Probe agents to confirm they are ready (have applied initialization)
+    ReadyCheck,
     /// Optionally carries a set of tasks for bundle construction
-    BundlingConstruction {
-        request_id: String,
-        tasks: Option<Vec<T>>,
-    },
+    BundlingConstruction { tasks: Option<Vec<T>> },
     /// Optionally carries consensus messages for conflict resolution
-    ConflictResolution {
-        request_id: String,
-        messages: Option<Vec<M>>,
-    },
+    ConflictResolution { messages: Option<Vec<M>> },
     /// Signal agents to terminate gracefully
-    Terminate { request_id: String },
+    Terminate,
 }
 
 /// Agent Phase for Replies/Status (from Agent)
@@ -56,6 +57,7 @@ pub enum AgentCommand<T, M, S> {
 pub enum AgentPhase {
     #[default]
     Standby,
+    Connected,
     Initializing,
     Initialized,
     BundlingConstructing,

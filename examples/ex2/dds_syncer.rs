@@ -14,11 +14,14 @@ use futures::StreamExt;
 use rustdds::with_key::Sample;
 use satcbba::CBBA;
 use satcbba::config::load_pkl;
-use satcbba::consensus::types::AgentId;
+use satcbba::consensus::types::{AgentId, Task as TaskTrait};
 use satcbba::sat::score::SatelliteScoreFunction;
+use satcbba::sat::report::{
+    AgentIterationLog, IterationLog, TaskReleaseRecord, build_report, write_report_json,
+};
 use satcbba::sat::types::Satellite;
 use satcbba::{
-    dds::{AgentCommand, AgentPhase, AgentReply, AgentStatus, create_common_qos},
+    dds::{AgentCommand, AgentCommandPayload, AgentPhase, AgentReply, AgentStatus, create_common_qos},
     sat::{
         ExploreTask, generate_random_tasks, load_satellites, load_tasks, render_visualization,
         save_satellites, save_tasks,
@@ -29,6 +32,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::time::{Duration, Instant};
+use std::time::Instant as StdInstant;
 use tracing_subscriber;
 use uuid::Uuid;
 
@@ -54,11 +58,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::new(
-                    "info,rustdds=warn,rustdds::rtps=warn,rustdds::network::udp_sender=error",
+                    "info,rustdds=error,rustdds::rtps=error,rustdds::network::udp_sender=error",
                 )
             }),
         )
         .try_init();
+
+    // Tag logs with compact role identifier for the syncer.
+    let _role_guard = tracing::info_span!("Syncer").entered();
 
     let cli = Cli::parse();
     let config_path = &cli.config;
@@ -157,6 +164,14 @@ pub async fn run(
     let mut reply_to_syncer_stream = network_reader.reply_to_syncer_stream;
     let mut latest_states: HashMap<AgentId, CBBA<ExploreTask, Satellite, SatelliteScoreFunction>> =
         HashMap::new();
+    let mut initial_snapshots: Vec<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>> =
+        Vec::new();
+    let mut bundle_snapshots: Vec<(usize, Vec<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>)> =
+        Vec::new();
+    let mut consensus_snapshots: Vec<(usize, Vec<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>)> =
+        Vec::new();
+    let mut iteration_logs: Vec<IterationLog> = Vec::new();
+    let sim_start = StdInstant::now();
 
     // --- Wait for Agents ---
     println!("Waiting for agents to respond to handshake...");
@@ -172,6 +187,7 @@ pub async fn run(
 
     // --- Broadcast per-agent CBBA state from syncer ---
     let cbba_config = config.algo.cbba.clone();
+    let mut init_requests: HashMap<AgentId, String> = HashMap::new();
     for agent_id in &ready_agents {
         if let Some(agent) = satellites.iter().find(|s| &s.id == agent_id) {
             let cbba = CBBA::new(
@@ -180,13 +196,17 @@ pub async fn run(
                 tasks.clone(),
                 Some(cbba_config.clone()),
             );
+            initial_snapshots.push(cbba.clone());
             let init_request_id = format!("init-{}-{}", agent_id.0, Uuid::new_v4());
+            let init_request_id_for_map = init_request_id.clone();
             network_writer
-                .publish_syncer_request(AgentCommand::Initialization {
+                .publish_syncer_request(AgentCommand {
                     request_id: init_request_id,
-                    state: Some(cbba),
+                    recipients: Some(vec![*agent_id]),
+                    payload: AgentCommandPayload::Initialization { state: Some(cbba) },
                 })
                 .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+            init_requests.insert(*agent_id, init_request_id_for_map);
         } else {
             println!(
                 "Warning: no satellite definition found for agent {}",
@@ -194,6 +214,24 @@ pub async fn run(
             );
         }
     }
+
+    await_initialization(
+        &init_requests,
+        &mut agent_status_stream,
+        &mut reply_to_syncer_stream,
+        Duration::from_millis(config.dds.handshake_timeout_ms),
+    )
+    .await;
+
+    // Explicit ready probe to ensure agents have applied initialization state.
+    await_ready(
+        &mut ready_agents,
+        &mut agent_status_stream,
+        &mut reply_to_syncer_stream,
+        &network_writer,
+        Duration::from_millis(config.dds.handshake_timeout_ms),
+    )
+    .await;
 
     // --- Iterative CBBA coordination over DDS ---
     let max_iterations = config.dds.max_iterations;
@@ -205,6 +243,8 @@ pub async fn run(
         iteration += 1;
         println!("--- Iteration {} ---", iteration);
 
+        let iter_start = Instant::now();
+
         let participants: HashSet<AgentId> = ready_agents.clone();
         if participants.is_empty() {
             println!("No participating agents; stopping iterations.");
@@ -213,10 +253,14 @@ pub async fn run(
 
         // Phase 1: Bundle Construction
         let bundle_request_id = format!("bundle-{}-{}", iteration, Uuid::new_v4());
+        let bundle_phase_start = Instant::now();
         network_writer
-            .publish_syncer_request(AgentCommand::BundlingConstruction {
+            .publish_syncer_request(AgentCommand {
                 request_id: bundle_request_id.clone(),
-                tasks: Some(tasks.clone()),
+                recipients: Some(participants.iter().cloned().collect()),
+                payload: AgentCommandPayload::BundlingConstruction {
+                    tasks: Some(tasks.clone()),
+                },
             })
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
@@ -232,32 +276,30 @@ pub async fn run(
             bundle_deadline,
         )
         .await;
+        let bundle_stage_ms = bundle_phase_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Snapshot bundle phase states for deferred visualization
+        let bundle_snapshot: Vec<_> = participants
+            .iter()
+            .filter_map(|id| latest_states.get(id).cloned())
+            .collect();
+        if !bundle_snapshot.is_empty() {
+            bundle_snapshots.push((iteration, bundle_snapshot));
+        }
 
         let bundle_changed = bundle_replies.values().any(|r| match &r.phase {
             AgentPhase::BundlingConstructingComplete(added) => !added.is_empty(),
             _ => false,
         });
 
-        if !latest_states.is_empty() {
-            let cbba_states: Vec<_> = latest_states.values().cloned().collect();
-            let filename = result_dir.join(format!("iter_{:02}_bundle.png", iteration));
-            if let Err(e) = render_visualization(
-                &filename,
-                &format!("Iteration {} (bundle)", iteration),
-                &cbba_states,
-                &tasks,
-                &config.viz,
-            ) {
-                println!("Warning: failed to visualize bundle stage: {e}");
-            }
-        }
-
         // Phase 2: Conflict Resolution
         let conflict_request_id = format!("conflict-{}-{}", iteration, Uuid::new_v4());
+        let consensus_phase_start = Instant::now();
         network_writer
-            .publish_syncer_request(AgentCommand::ConflictResolution {
+            .publish_syncer_request(AgentCommand {
                 request_id: conflict_request_id.clone(),
-                messages: None,
+                recipients: Some(participants.iter().cloned().collect()),
+                payload: AgentCommandPayload::ConflictResolution { messages: None },
             })
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
@@ -273,25 +315,21 @@ pub async fn run(
             conflict_deadline,
         )
         .await;
+        let consensus_stage_ms = consensus_phase_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Snapshot consensus phase states for deferred visualization
+        let consensus_snapshot: Vec<_> = participants
+            .iter()
+            .filter_map(|id| latest_states.get(id).cloned())
+            .collect();
+        if !consensus_snapshot.is_empty() {
+            consensus_snapshots.push((iteration, consensus_snapshot));
+        }
 
         let conflict_changed = conflict_replies.values().any(|r| match &r.phase {
             AgentPhase::ConflictResolvingComplete(released) => !released.is_empty(),
             _ => false,
         });
-
-        if !latest_states.is_empty() {
-            let cbba_states: Vec<_> = latest_states.values().cloned().collect();
-            let filename = result_dir.join(format!("iter_{:02}_consensus.png", iteration));
-            if let Err(e) = render_visualization(
-                &filename,
-                &format!("Iteration {} (consensus)", iteration),
-                &cbba_states,
-                &tasks,
-                &config.viz,
-            ) {
-                println!("Warning: failed to visualize consensus stage: {e}");
-            }
-        }
 
         let missing_bundle = participants
             .iter()
@@ -313,6 +351,58 @@ pub async fn run(
             println!("Converged after {} iteration(s).", iteration);
             converged = true;
         }
+
+        let iteration_ms = iter_start.elapsed().as_secs_f64() * 1000.0;
+
+        let mut agent_logs = Vec::new();
+        for agent_id in &participants {
+            if let Some(reply) = bundle_replies.get(agent_id) {
+                let added = match &reply.phase {
+                    AgentPhase::BundlingConstructingComplete(tasks) =>
+                        tasks.iter().map(|t| t.0).collect(),
+                    _ => Vec::new(),
+                };
+                let released = match conflict_replies.get(agent_id) {
+                    Some(r) => match &r.phase {
+                        AgentPhase::ConflictResolvingComplete(dropped) => dropped
+                            .iter()
+                            .map(|(task_id, succs)| TaskReleaseRecord {
+                                task_id: task_id.0,
+                                successors: succs.iter().map(|s| s.0).collect(),
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    },
+                    None => Vec::new(),
+                };
+
+                let bundle = latest_states
+                    .get(agent_id)
+                    .map(|cbba| cbba.bundle.iter().map(|t| t.id().0).collect())
+                    .unwrap_or_default();
+                let path = latest_states
+                    .get(agent_id)
+                    .map(|cbba| cbba.path.iter().map(|t| t.id().0).collect())
+                    .unwrap_or_default();
+
+                agent_logs.push(AgentIterationLog {
+                    agent_id: agent_id.0,
+                    added_tasks: added,
+                    released_tasks: released,
+                    bundle,
+                    path,
+                });
+            }
+        }
+
+        iteration_logs.push(IterationLog {
+            iteration,
+            bundle_stage_ms,
+            consensus_stage_ms,
+            iteration_ms,
+            converged_after_this: converged,
+            agents: agent_logs,
+        });
     }
 
     if !converged {
@@ -321,8 +411,10 @@ pub async fn run(
         println!("Converged; sending terminate command to agents.");
         let terminate_request_id = format!("terminate-{}", Uuid::new_v4());
         network_writer
-            .publish_syncer_request(AgentCommand::Terminate {
+            .publish_syncer_request(AgentCommand {
                 request_id: terminate_request_id.clone(),
+                recipients: Some(ready_agents.iter().cloned().collect()),
+                payload: AgentCommandPayload::Terminate,
             })
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
@@ -337,18 +429,57 @@ pub async fn run(
         .await;
     }
 
-    // Save a visualization of the final assignment if we have states
-    if !latest_states.is_empty() {
-        let cbba_states: Vec<_> = latest_states.values().cloned().collect();
-        let filename = result_dir.join(format!("iteration_{}.png", iteration));
-        if let Err(e) = render_visualization(
-            &filename,
-            &format!("Iteration {}", iteration),
-            &cbba_states,
-            &tasks,
-            &config.viz,
-        ) {
-            println!("Warning: failed to visualize final iteration: {e}");
+    // Save report and final visualization
+    if let Some(report_states) = if latest_states.is_empty() {
+        None
+    } else {
+        Some(latest_states.values().cloned().collect::<Vec<_>>())
+    } {
+        let report = build_report(&report_states, &tasks, iteration_logs, sim_start);
+        if let Err(e) = write_report_json(&report, &result_dir) {
+            println!("Warning: failed to write summary.json: {e}");
+        }
+
+        if config.viz.enabled {
+            if !initial_snapshots.is_empty() {
+                let filename = result_dir.join("iter_00_initial.png");
+                if let Err(e) = render_visualization(
+                    &filename,
+                    "Iteration 0 (initial)",
+                    &initial_snapshots,
+                    &tasks,
+                    &config.viz,
+                ) {
+                    println!("Warning: failed to visualize initial state: {e}");
+                }
+            }
+
+            for (iter_idx, states) in &bundle_snapshots {
+                let filename = result_dir.join(format!("iter_{:02}_bundle.png", iter_idx));
+                if let Err(e) = render_visualization(
+                    &filename,
+                    &format!("Iteration {} (bundle)", iter_idx),
+                    states,
+                    &tasks,
+                    &config.viz,
+                ) {
+                    println!("Warning: failed to visualize bundle iteration {}: {e}", iter_idx);
+                }
+            }
+
+            for (iter_idx, states) in &consensus_snapshots {
+                let filename = result_dir.join(format!("iter_{:02}_consensus.png", iter_idx));
+                if let Err(e) = render_visualization(
+                    &filename,
+                    &format!("Iteration {} (consensus)", iter_idx),
+                    states,
+                    &tasks,
+                    &config.viz,
+                ) {
+                    println!("Warning: failed to visualize consensus iteration {}: {e}", iter_idx);
+                }
+            }
+
         }
     }
 
@@ -374,9 +505,10 @@ async fn run_handshake(
     );
 
     network_writer
-        .publish_syncer_request(AgentCommand::Initialization {
+        .publish_syncer_request(AgentCommand {
             request_id: handshake_request_id.clone(),
-            state: None,
+            recipients: None,
+            payload: AgentCommandPayload::Initialization { state: None },
         })
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
@@ -418,7 +550,9 @@ async fn run_handshake(
             Some(result) = agent_status_stream.next() => {
                 let Ok(sample) = result else { continue };
                 let Sample::Value(msg) = sample.into_value() else { continue };
-                if msg.phase == AgentPhase::Initialized && ready_agents.insert(msg.agent_id) {
+                if matches!(msg.phase, AgentPhase::Initialized | AgentPhase::Connected)
+                    && ready_agents.insert(msg.agent_id)
+                {
                     println!(
                         "Agent {} responded to handshake. Discovered {} agent(s).",
                         msg.agent_id,
@@ -440,6 +574,148 @@ async fn run_handshake(
     }
 
     Ok(())
+}
+
+async fn await_initialization(
+    init_requests: &HashMap<AgentId, String>,
+    agent_status_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
+    reply_to_syncer_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
+    _timeout: Duration,
+) {
+    use rustdds::with_key::Sample;
+
+    if init_requests.is_empty() {
+        return;
+    }
+
+    let mut pending: HashSet<AgentId> = init_requests.keys().cloned().collect();
+
+    println!(
+        "Waiting for initialization acknowledgements from {} agent(s)...",
+        pending.len()
+    );
+
+    while !pending.is_empty() {
+        tokio::select! {
+            Some(result) = reply_to_syncer_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(msg) = sample.into_value() else { continue };
+                if let Some(expected) = init_requests.get(&msg.agent_id) {
+                    if &msg.request_id == expected && matches!(msg.phase, AgentPhase::Initialized) {
+                        if pending.remove(&msg.agent_id) {
+                            println!("Agent {} acknowledged initialization.", msg.agent_id);
+                        }
+                    }
+                }
+            }
+            Some(result) = agent_status_stream.next() => {
+                let Ok(sample) = result else { continue };
+                let Sample::Value(msg) = sample.into_value() else { continue };
+                if msg.phase == AgentPhase::Initialized {
+                    if pending.remove(&msg.agent_id) {
+                        println!("Agent {} reported Initialized status.", msg.agent_id);
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn await_ready(
+    agents: &mut HashSet<AgentId>,
+    agent_status_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
+    reply_to_syncer_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
+    network_writer: &satcbba::dds::transport::SyncerWriter<
+        ExploreTask,
+        CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
+    >,
+    timeout: Duration,
+) {
+    use rustdds::with_key::Sample;
+
+    if agents.is_empty() {
+        return;
+    }
+
+    let mut pending: HashSet<AgentId> = agents.clone();
+    let poll_window = if timeout.is_zero() {
+        Duration::from_secs(1)
+    } else {
+        timeout
+    };
+    let mut attempt: u32 = 0;
+
+    while !pending.is_empty() {
+        attempt += 1;
+
+        let ready_request_id = format!("ready-{}-{}", attempt, Uuid::new_v4());
+        if let Err(e) = network_writer.publish_syncer_request(AgentCommand {
+            request_id: ready_request_id.clone(),
+            recipients: Some(pending.iter().cloned().collect()),
+            payload: AgentCommandPayload::ReadyCheck,
+        }) {
+            println!("Warning: failed to send ReadyCheck attempt {}: {e}", attempt);
+        }
+
+        println!(
+            "Awaiting ready acknowledgements (attempt {}; {} agent(s) pending)...",
+            attempt,
+            pending.len()
+        );
+
+        let deadline = Instant::now() + poll_window;
+
+        loop {
+            if pending.is_empty() {
+                break;
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+
+            let remaining = deadline.saturating_duration_since(now);
+
+            tokio::select! {
+                _ = tokio::time::sleep(remaining) => {
+                    break;
+                }
+                Some(result) = reply_to_syncer_stream.next() => {
+                    let Ok(sample) = result else { continue };
+                    let Sample::Value(msg) = sample.into_value() else { continue };
+                    if msg.request_id == ready_request_id && matches!(msg.phase, AgentPhase::Initialized) {
+                        if pending.remove(&msg.agent_id) {
+                            println!("Agent {} ready after init.", msg.agent_id);
+                        }
+                    } else if matches!(msg.phase, AgentPhase::Initialized) {
+                        if pending.remove(&msg.agent_id) {
+                            println!("Agent {} reported Initialized status during ready check.", msg.agent_id);
+                        }
+                    }
+                }
+                Some(result) = agent_status_stream.next() => {
+                    let Ok(sample) = result else { continue };
+                    let Sample::Value(msg) = sample.into_value() else { continue };
+                    if matches!(msg.phase, AgentPhase::Initialized) {
+                        if pending.remove(&msg.agent_id) {
+                            println!("Agent {} reported Initialized status during ready check.", msg.agent_id);
+                        }
+                    }
+                }
+                else => {
+                    // Streams ended; avoid tight loop by breaking and retrying publish.
+                    break;
+                }
+            }
+        }
+    }
+
+    if pending.is_empty() {
+        println!("All agents reported ready.");
+    } else {
+        println!("Ready check aborted early; still missing {:?}.", pending);
+    }
 }
 
 async fn collect_phase_replies(
@@ -470,7 +746,9 @@ async fn collect_phase_replies(
             Some(result) = reply_to_syncer_stream.next() => {
                 let Ok(sample) = result else { continue };
                 let Sample::Value(msg) = sample.into_value() else { continue };
-                ready_agents.insert(msg.agent_id);
+                if expected_agents.contains(&msg.agent_id) {
+                    ready_agents.insert(msg.agent_id);
+                }
                 if msg.request_id != request_id {
                     continue;
                 }
@@ -482,7 +760,9 @@ async fn collect_phase_replies(
             Some(result) = agent_status_stream.next() => {
                 let Ok(sample) = result else { continue };
                 let Sample::Value(msg) = sample.into_value() else { continue };
-                ready_agents.insert(msg.agent_id);
+                if expected_agents.contains(&msg.agent_id) {
+                    ready_agents.insert(msg.agent_id);
+                }
             }
             Some(result) = agent_state_stream.next() => {
                 let Ok(sample) = result else { continue };

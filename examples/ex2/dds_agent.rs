@@ -13,7 +13,7 @@ use rustdds::with_key::Sample;
 use satcbba::CBBA;
 use satcbba::consensus::types::{AgentId, ConsensusMessage};
 use satcbba::dds::transport::AgentWriter;
-use satcbba::dds::{AgentCommand, AgentPhase, AgentReply, create_common_qos};
+use satcbba::dds::{AgentCommand, AgentCommandPayload, AgentPhase, AgentReply, create_common_qos};
 use satcbba::sat::score::SatelliteScoreFunction;
 use satcbba::sat::types::{ExploreTask, Satellite};
 use tracing::{debug, info, warn};
@@ -53,7 +53,16 @@ impl AgentContext {
         self.iteration = 0;
         self.consensus_buffer.clear();
         self.pending_tasks = None;
-        self.cbba = None;
+        if let Some(cbba) = self.cbba.as_mut() {
+            cbba.clear();
+        }
+    }
+}
+
+fn should_handle_command(agent_id: AgentId, recipients: &Option<Vec<AgentId>>) -> bool {
+    match recipients {
+        None => true, // broadcast
+        Some(list) => list.is_empty() || list.iter().any(|id| id == &agent_id),
     }
 }
 
@@ -63,7 +72,7 @@ async fn main() -> Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::new(
-                    "info,rustdds=warn,rustdds::rtps=warn,rustdds::network::udp_sender=error",
+                    "info,rustdds=error,rustdds::rtps=error,rustdds::network::udp_sender=error",
                 )
             }),
         )
@@ -72,6 +81,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let agent_id = cli.agent_id;
     let domain_id = cli.domain_id;
+
+    let _role_guard = tracing::info_span!("Agent", id = agent_id).entered();
+
     run(agent_id, domain_id).await
 }
 
@@ -130,6 +142,29 @@ pub async fn run(agent_id: u32, domain_id: u16) -> Result<()> {
     }
 }
 
+
+fn ensure_cbba_present(
+    ctx: &AgentContext,
+    request_id: &str,
+    agent_id: AgentId,
+    network_writer: &AgentWriter<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
+) -> Result<bool> {
+    if ctx.cbba.is_some() {
+        return Ok(true);
+    }
+
+    warn!("Received command before initialization; replying standby");
+    network_writer.publish_status(AgentPhase::Standby)?;
+    let reply = AgentReply {
+        request_id: request_id.to_string(),
+        agent_id,
+        iteration: ctx.iteration,
+        phase: AgentPhase::Standby,
+    };
+    network_writer.publish_reply_to_syncer(reply)?;
+    Ok(false)
+}
+
 async fn handle_syncer_message(
     msg: AgentCommand<
         ExploreTask,
@@ -140,13 +175,29 @@ async fn handle_syncer_message(
     ctx: &mut AgentContext,
     network_writer: &AgentWriter<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
 ) -> Result<()> {
-    match msg {
-        AgentCommand::Initialization { request_id, state } => {
-            network_writer.publish_status(AgentPhase::Initializing)?;
+    let AgentCommand {
+        request_id,
+        recipients,
+        payload,
+    } = msg;
+
+    if !should_handle_command(agent_id, &recipients) {
+        return Ok(());
+    }
+
+    match payload {
+        AgentCommandPayload::Initialization { state } => {
             ctx.reset();
-            if let Some(initial_state) = state {
-                // Each agent picks its matching state; ignore others
-                if initial_state.agent.id == agent_id {
+            match state {
+                Some(initial_state) => {
+                    // Agent id mismatch is a programming/config error; fail fast.
+                    assert_eq!(
+                        initial_state.agent.id, agent_id,
+                        "Initialization state sent to wrong agent: expected {:?}, got {:?}",
+                        agent_id, initial_state.agent.id
+                    );
+
+                    network_writer.publish_status(AgentPhase::Initializing)?;
                     info!(
                         "Initialized agent {} at pos ({}, {})",
                         agent_id.0,
@@ -154,27 +205,35 @@ async fn handle_syncer_message(
                         initial_state.agent.lon_e6
                     );
                     ctx.cbba = Some(initial_state);
-                } else {
-                    return Ok(()); // not intended for this agent
+
+                    network_writer.publish_status(AgentPhase::Initialized)?;
+
+                    let reply = AgentReply {
+                        request_id,
+                        agent_id,
+                        iteration: ctx.iteration,
+                        phase: AgentPhase::Initialized,
+                    };
+                    network_writer.publish_reply_to_syncer(reply)?;
                 }
-            } else {
-                // Handshake-only init; no CBBA yet
+                None => {
+                    // Handshake-only init; mark as connected without entering Initializing.
+                    network_writer.publish_status(AgentPhase::Connected)?;
+                    let reply = AgentReply {
+                        request_id,
+                        agent_id,
+                        iteration: ctx.iteration,
+                        phase: AgentPhase::Connected,
+                    };
+                    network_writer.publish_reply_to_syncer(reply)?;
+                }
             }
-
-            network_writer.publish_status(AgentPhase::Initialized)?;
-
-            let reply = AgentReply {
-                request_id,
-                agent_id,
-                iteration: ctx.iteration,
-                phase: AgentPhase::Initialized,
-            };
-            network_writer.publish_reply_to_syncer(reply)?;
         }
-        AgentCommand::BundlingConstruction { request_id, tasks } => {
-            let cbba = ctx.cbba.as_mut().ok_or_else(|| {
-                anyhow!("CBBA not initialized; missing initialization from syncer")
-            })?;
+        AgentCommandPayload::BundlingConstruction { tasks } => {
+            if !ensure_cbba_present(ctx, &request_id, agent_id, network_writer)? {
+                return Ok(());
+            }
+            let cbba = ctx.cbba.as_mut().expect("cbba checked present");
             ctx.iteration += 1;
             network_writer.publish_status(AgentPhase::BundlingConstructing)?;
             info!(
@@ -211,13 +270,11 @@ async fn handle_syncer_message(
             network_writer.publish_reply_to_syncer(reply)?;
             network_writer.publish_status(AgentPhase::BundlingConstructingComplete(added))?;
         }
-        AgentCommand::ConflictResolution {
-            request_id,
-            messages,
-        } => {
-            let cbba = ctx.cbba.as_mut().ok_or_else(|| {
-                anyhow!("CBBA not initialized; missing initialization from syncer")
-            })?;
+        AgentCommandPayload::ConflictResolution { messages } => {
+            if !ensure_cbba_present(ctx, &request_id, agent_id, network_writer)? {
+                return Ok(());
+            }
+            let cbba = ctx.cbba.as_mut().expect("cbba checked present");
             network_writer.publish_status(AgentPhase::ConflictResolving)?;
             info!(
                 "Starting Conflict Resolution Phase (iteration {})",
@@ -232,12 +289,13 @@ async fn handle_syncer_message(
                 ctx.consensus_buffer.extend(inline_messages);
             }
 
+            let buffered_messages = std::mem::take(&mut ctx.consensus_buffer);
+
             info!(
                 "Processing {} buffered consensus messages",
-                ctx.consensus_buffer.len()
+                buffered_messages.len()
             );
-            let dropped_tasks = cbba.consensus_phase(&ctx.consensus_buffer);
-            ctx.consensus_buffer.clear();
+            let dropped_tasks = cbba.consensus_phase(&buffered_messages);
 
             let has_changes = !dropped_tasks.is_empty();
             if has_changes {
@@ -253,10 +311,11 @@ async fn handle_syncer_message(
             network_writer.publish_reply_to_syncer(reply)?;
             network_writer.publish_status(AgentPhase::ConflictResolvingComplete(dropped_tasks))?;
         }
-        AgentCommand::Terminate { request_id } => {
-            let cbba = ctx.cbba.as_ref().ok_or_else(|| {
-                anyhow!("CBBA not initialized; missing initialization from syncer")
-            })?;
+        AgentCommandPayload::Terminate => {
+            if !ensure_cbba_present(ctx, &request_id, agent_id, network_writer)? {
+                return Ok(());
+            }
+            let cbba = ctx.cbba.as_ref().expect("cbba checked present");
             network_writer.publish_status(AgentPhase::Terminating)?;
 
             let reply = AgentReply {
@@ -269,6 +328,21 @@ async fn handle_syncer_message(
 
             network_writer.publish_status(AgentPhase::Standby)?;
             return Err(anyhow!("Received terminate command from syncer"));
+        }
+        AgentCommandPayload::ReadyCheck => {
+            let phase = if ctx.cbba.is_some() {
+                AgentPhase::Initialized
+            } else {
+                AgentPhase::Standby
+            };
+            network_writer.publish_status(phase.clone())?;
+            let reply = AgentReply {
+                request_id,
+                agent_id,
+                iteration: ctx.iteration,
+                phase,
+            };
+            network_writer.publish_reply_to_syncer(reply)?;
         }
     }
     Ok(())

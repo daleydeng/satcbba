@@ -2,7 +2,7 @@ data {
   satellites {
     mode = "random"
     random {
-        count = 5
+        count = 2
     }
   }
 
@@ -16,14 +16,17 @@ data {
 
 dds {
   domain_id = 0
-  num_agents = 5
   max_iterations = 100
 }
 
 viz {
+  enabled = true
   enable_map = true
   show_task_info = true
   show_path_time = true
+  image_size = List(1920, 960)
+  font_size = 24.0
+  line_thickness = 4
 }
 
 algo {

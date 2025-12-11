@@ -89,7 +89,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             debug!("[Syncer] Sample value: event_type={}", ev.event_type);
                             if ev.event_type == "pong" {
                                 match serde_json::from_slice::<serde_json::Value>(&ev.data) {
-                                    Ok(v) => info!("[Syncer] Pong data: {}", v),
+                                    Ok(v) => {
+                                        let agent = v.get("agent_id").and_then(|x| x.as_u64());
+                                        let ping = v.get("ping_id").and_then(|x| x.as_u64());
+                                        match (agent, ping) {
+                                            (Some(a), Some(p)) => info!("[Syncer] Received pong {} from agent {}", p, a),
+                                            _ => info!("[Syncer] Received pong (unable to parse ids): {}", v),
+                                        }
+                                    }
                                     Err(e) => error!("[Syncer] ERROR decoding pong data: {:?}", e),
                                 }
                             }

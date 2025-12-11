@@ -9,17 +9,40 @@ use plotters::style::PaletteColor;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
+use image::ImageReader;
 
 type Chart2d<'a> = ChartContext<'a, BitMapBackend<'a>, Cartesian2d<RangedCoordf64, RangedCoordf64>>;
 type Coord = (f64, f64);
 type AgentColor = PaletteColor<Palette99>;
 
-#[derive(Default, Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct VizConfig {
+    pub enabled: bool,
+    pub output_dir: String,
+    pub file_name: String,
+    pub image_size: (u32, u32),
     pub enable_map: bool,
     pub show_task_info: bool,
     pub show_path_time: bool,
+    pub font_size: f64,
+    pub line_thickness: u32,
+}
+
+impl Default for VizConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            output_dir: "visualizations".to_string(),
+            file_name: "viz.png".to_string(),
+            image_size: (1024, 1024),
+            enable_map: false,
+            show_task_info: true,
+            show_path_time: true,
+            font_size: 16.0,
+            line_thickness: 2,
+        }
+    }
 }
 pub fn render_visualization(
     filename: &Path,
@@ -28,23 +51,43 @@ pub fn render_visualization(
     all_tasks: &[ExploreTask],
     options: &VizConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let root = BitMapBackend::new(filename, (2560, 1440)).into_drawing_area();
-    root.fill(&WHITE)?;
+    let (width, height) = options.image_size;
+    let buf_size = (width * height * 3) as usize;
+    let mut buffer = if options.enable_map {
+        let map_path = Path::new("images/map.png");
+        let map_image = ImageReader::open(map_path)?.decode()?;
+        let resized = image::imageops::resize(
+            &map_image.to_rgb8(),
+            width,
+            height,
+            image::imageops::FilterType::Lanczos3,
+        );
+        resized.into_raw()
+    } else {
+        vec![255; buf_size]
+    };
 
-    let mut chart: Chart2d<'_> = ChartBuilder::on(&root)
-        .caption(caption, ("sans-serif", 50).into_font())
-        .margin(20)
-        .x_label_area_size(50)
-        .y_label_area_size(50)
-        .build_cartesian_2d(-180.0..180.0, -90.0..90.0)?;
+    {
+        let root = BitMapBackend::with_buffer(&mut buffer, (width, height)).into_drawing_area();
 
-    // Map overlay disabled: plotters bitmap API is currently incompatible with the image overlay path.
+        let mut chart: Chart2d<'_> = ChartBuilder::on(&root)
+            .caption(caption, ("sans-serif", 50).into_font())
+            .margin(20)
+            .x_label_area_size(50)
+            .y_label_area_size(50)
+            .build_cartesian_2d(-180.0..180.0, -90.0..90.0)?;
 
-    chart.configure_mesh().draw()?;
-    draw_tasks(&mut chart, all_tasks, options)?;
-    draw_agents_and_paths(&mut chart, cbba_instances, options)?;
+        chart.configure_mesh().draw()?;
+        draw_tasks(&mut chart, all_tasks, options)?;
+        draw_agents_and_paths(&mut chart, cbba_instances, options)?;
 
-    root.present()?;
+        root.present()?;
+    }
+
+    if let Some(parent) = filename.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    image::save_buffer(filename, &buffer, width, height, image::ColorType::Rgb8)?;
     Ok(())
 }
 
@@ -59,9 +102,10 @@ fn draw_tasks(
     }))?;
 
     for task in tasks {
+        let point_radius = (options.line_thickness as i32).max(2);
         chart.draw_series(PointSeries::of_element(
             vec![(deg_from_e6(task.lon_e6), deg_from_e6(task.lat_e6))],
-            5,
+            point_radius,
             &RED.mix(0.0),
             &|c, _s, _st| {
                 let allowed_str = task
@@ -84,7 +128,7 @@ fn draw_tasks(
                 let label_el = Text::new(
                     label,
                     (8, -8),
-                    ("sans-serif", 25)
+                    ("sans-serif", options.font_size)
                         .into_font()
                         .style(FontStyle::Bold)
                         .color(&RED),
@@ -102,7 +146,9 @@ fn draw_tasks(
                 let info_el = Text::new(
                     info_str,
                     (8, -28),
-                    ("sans-serif", 15).into_font().color(&RED.mix(0.8)),
+                    ("sans-serif", options.font_size * 0.75)
+                        .into_font()
+                        .color(&RED.mix(0.8)),
                 );
 
                 EmptyElement::at(c) + label_el + info_el
@@ -123,7 +169,7 @@ fn draw_agents_and_paths(
         let agent_pos = (deg_from_e6(agent.lon_e6), deg_from_e6(agent.lat_e6));
         let color: AgentColor = Palette99::pick(agent.id.0 as usize);
 
-        draw_agent_marker(chart, agent_pos, agent.id.0, &color)?;
+        draw_agent_marker(chart, agent_pos, agent.id.0, &color, options)?;
         draw_path(chart, cbba, agent_pos, &color, options)?;
     }
 
@@ -135,18 +181,19 @@ fn draw_agent_marker(
     pos: Coord,
     agent_id: u32,
     color: &AgentColor,
+    options: &VizConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     chart.draw_series(PointSeries::of_element(
         vec![pos],
-        8,
+        (options.line_thickness as i32).max(4),
         &color.mix(0.8),
         &|c, _s, _st| {
             EmptyElement::at(c)
-                + Circle::new((0, 0), 8, color.filled())
+                + Circle::new((0, 0), options.line_thickness as i32 * 3, color.filled())
                 + Text::new(
                     format!("A{}", agent_id),
                     (8, 8),
-                    ("sans-serif", 25)
+                    ("sans-serif", options.font_size)
                         .into_font()
                         .style(FontStyle::Bold)
                         .color(&BLUE),
@@ -169,9 +216,9 @@ fn draw_path(
         let wrapped = (task_pos.0 - prev_pos.0).abs() > 180.0;
 
         if wrapped {
-            draw_wrapped_segment(chart, color, prev_pos, task_pos)?;
+            draw_wrapped_segment(chart, color, prev_pos, task_pos, options)?;
         } else {
-            draw_direct_segment(chart, color, prev_pos, task_pos)?;
+            draw_direct_segment(chart, color, prev_pos, task_pos, options)?;
         }
 
         if options.show_path_time {
@@ -182,10 +229,11 @@ fn draw_path(
                 prev_pos,
                 task_pos,
                 wrapped,
+                options,
             )?;
         }
 
-        draw_bid_info(chart, &cbba.bids, task_pos, task.id())?;
+        draw_bid_info(chart, &cbba.bids, task_pos, task.id(), options)?;
         prev_pos = task_pos;
     }
 
@@ -197,10 +245,11 @@ fn draw_direct_segment(
     color: &AgentColor,
     from: Coord,
     to: Coord,
+    options: &VizConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     chart.draw_series(LineSeries::new(
         vec![from, to],
-        ShapeStyle::from(&color.mix(0.6)).stroke_width(5),
+        ShapeStyle::from(&color.mix(0.6)).stroke_width(options.line_thickness),
     ))?;
     Ok(())
 }
@@ -210,6 +259,7 @@ fn draw_wrapped_segment(
     color: &AgentColor,
     from: Coord,
     to: Coord,
+    options: &VizConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let dist_to_edge = if from.0 > 0.0 {
         180.0 - from.0
@@ -233,12 +283,12 @@ fn draw_wrapped_segment(
 
     chart.draw_series(LineSeries::new(
         vec![from, (edge1_x, y_edge)],
-        ShapeStyle::from(&color.mix(0.6)).stroke_width(5),
+        ShapeStyle::from(&color.mix(0.6)).stroke_width(options.line_thickness),
     ))?;
 
     chart.draw_series(LineSeries::new(
         vec![(edge2_x, y_edge), to],
-        ShapeStyle::from(&color.mix(0.6)).stroke_width(5),
+        ShapeStyle::from(&color.mix(0.6)).stroke_width(options.line_thickness),
     ))?;
 
     Ok(())
@@ -251,6 +301,7 @@ fn draw_travel_time(
     from: Coord,
     to: Coord,
     wrapped: bool,
+    options: &VizConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let dist_km = haversine_km(from.1, from.0, to.1, to.0);
     let speed_kmps = speed_kmph / 3600.0;
@@ -272,7 +323,7 @@ fn draw_travel_time(
                 + Text::new(
                     format!("{:.0}s", time_sec),
                     (0, 0),
-                    ("sans-serif", 15)
+                    ("sans-serif", options.font_size * 0.85)
                         .into_font()
                         .style(FontStyle::Bold)
                         .color(color),
@@ -288,6 +339,7 @@ fn draw_bid_info(
     bids: &HashMap<TaskId, BidInfo>,
     pos: Coord,
     task_id: TaskId,
+    options: &VizConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(BidInfo::Winner(_, bid, _)) = bids.get(&task_id) {
         chart.draw_series(PointSeries::of_element(
@@ -299,7 +351,9 @@ fn draw_bid_info(
                     + Text::new(
                         format!("{:.1}", bid),
                         (8, 45),
-                        ("sans-serif", 15).into_font().color(&BLACK.mix(0.8)),
+                        ("sans-serif", options.font_size * 0.65)
+                            .into_font()
+                            .color(&BLACK.mix(0.8)),
                     )
             },
         ))?;

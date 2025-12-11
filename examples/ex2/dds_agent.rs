@@ -12,20 +12,17 @@ use futures::StreamExt;
 use rustdds::with_key::Sample;
 use satcbba::CBBA;
 use satcbba::config::load_pkl;
-use satcbba::consensus::types::ConsensusMessage;
+use satcbba::consensus::types::{AgentId, ConsensusMessage};
 use satcbba::dds::transport::AgentWriter;
 use satcbba::dds::{AgentCommand, AgentPhase, AgentReply, create_common_qos};
-use satcbba::sat::load_satellites;
 use satcbba::sat::score::SatelliteScoreFunction;
 use satcbba::sat::types::{ExploreTask, Satellite};
-use std::path::Path;
 use tracing::{debug, info, warn};
 use tracing_subscriber;
 
 #[path = "config.rs"]
 pub mod config;
 use config::Config;
-use config::SatSourceConfig;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -80,23 +77,11 @@ async fn main() -> Result<()> {
 }
 
 pub async fn run(agent_id: u32, config: Config) -> Result<()> {
-    // Load satellite configuration
-    let satellites = match &config.data.satellites {
-        SatSourceConfig::Random(cfg) => satcbba::sat::generate_random_satellites(cfg),
-        SatSourceConfig::File(cfg) => {
-            load_satellites(Path::new(&cfg.path)).context("Failed to load satellites from file")?
-        }
-    };
-
-    let agent = satellites
-        .iter()
-        .find(|s| s.id.0 == agent_id)
-        .cloned()
-        .ok_or_else(|| anyhow!("Agent ID {} not found in configuration", agent_id))?;
+    let agent_identifier = AgentId(agent_id);
 
     info!(
-        "Starting Agent {} (Async/Tokio) at pos ({}, {})",
-        agent_id, agent.lat_e6, agent.lon_e6
+        "Starting Agent {} (Async/Tokio); waiting for initialization from syncer",
+        agent_identifier.0
     );
 
     // --- DDS Setup ---
@@ -107,8 +92,8 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
     let (network_writer, network_reader) = satcbba::dds::transport::new_agent_transport::<
         CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
         ExploreTask,
-    >(agent.id, domain_id, qos);
-    debug!("Agent {} transport initialized", agent_id);
+    >(agent_identifier, domain_id, qos);
+    debug!("Agent {} transport initialized", agent_identifier.0);
 
     // --- Create Streams ---
     let mut syncer_stream = network_reader.syncer_request_stream;
@@ -130,7 +115,7 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
                         let msg = sample.into_value();
                         handle_syncer_message(
                             msg,
-                            agent.id,
+                            agent_identifier,
                             &mut ctx,
                             &mut cbba,
                             &network_writer,
@@ -173,6 +158,12 @@ async fn handle_syncer_message(
             if let Some(initial_state) = state {
                 // Each agent picks its matching state; ignore others
                 if initial_state.agent.id == agent_id {
+                    info!(
+                        "Initialized agent {} at pos ({}, {})",
+                        agent_id.0,
+                        initial_state.agent.lat_e6,
+                        initial_state.agent.lon_e6
+                    );
                     *cbba = Some(initial_state);
                 } else {
                     return Ok(()); // not intended for this agent

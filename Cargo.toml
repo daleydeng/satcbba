@@ -35,7 +35,7 @@ uuid = { version = "1", features = ["v4"] }
 
 [[example]]
 name = "ex1_sim_sat"
-path = "examples/ex1/ex1_sim_sat.rs"
+path = "examples/ex1/sim_sat.rs"
 
 [[example]]
 name = "ex2_dds_agent"

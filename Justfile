@@ -18,6 +18,10 @@ build-ex1-sim-sat:
 run-ex1-sim-sat config="examples/ex1/config.pkl": build-ex1-sim-sat
 	@cargo run --release --example {{ex1_sim_sat}} -- --config {{config}}
 
+run-ex1-sim-sat-bench config="examples/ex1/config.pkl": build-ex1-sim-sat
+	@echo "Running sim_sat benchmark (viz disabled) with config={{config}}"
+	@cargo run --release --example {{ex1_sim_sat}} -- --config {{config}} --disable-viz
+
 build-ex3-deps:
 	@cargo build --release --example {{ex3_agent}}
 	@cargo build --release --example {{ex3_syncer}}

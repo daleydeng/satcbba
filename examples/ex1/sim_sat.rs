@@ -2,7 +2,7 @@
 
 use clap::Parser;
 use satcbba::sat::data::{SatGenParams, SourceMode, TaskGenParams};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use satcbba::config::load_pkl;
 use satcbba::consensus::cbba::logging as cbba_log;
@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use chrono::Local;
 use satcbba::CBBA;
 use satcbba::cbba::Config as CBBAConfig;
-use satcbba::consensus::types::ConsensusMessage;
+use satcbba::consensus::types::{ConsensusMessage, Task};
 use satcbba::sat::score::SatelliteScoreFunction;
 use satcbba::sat::viz::VizConfig;
 use satcbba::sat::{
@@ -20,6 +20,9 @@ use satcbba::sat::{
     render_visualization, save_satellites, save_tasks,
 };
 use std::path::Path;
+use std::time::Instant;
+use std::fs::File;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Clone)]
 struct FileSourceConfig {
@@ -152,12 +155,57 @@ struct SimConfig {
     algo: AlgoConfig,
 }
 
+#[derive(Debug, Serialize)]
+struct TaskReleaseRecord {
+    task_id: u32,
+    successors: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentIterationLog {
+    agent_id: u32,
+    added_tasks: Vec<u32>,
+    released_tasks: Vec<TaskReleaseRecord>,
+    bundle: Vec<u32>,
+    path: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct IterationLog {
+    iteration: usize,
+    bundle_stage_ms: f64,
+    consensus_stage_ms: f64,
+    iteration_ms: f64,
+    converged_after_this: bool,
+    agents: Vec<AgentIterationLog>,
+}
+
+#[derive(Debug, Serialize)]
+struct FinalAssignment {
+    task_id: u32,
+    agent_id: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct SimulationReport {
+    iterations: Vec<IterationLog>,
+    final_assignments: Vec<FinalAssignment>,
+    total_duration_ms: f64,
+    time_per_iteration_ms: f64,
+    agent_count: usize,
+    task_count: usize,
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Path to configuration file
     #[arg(long, default_value = "examples/ex1/config.pkl")]
     config: String,
+
+    /// Disable visualization output (overrides config)
+    #[arg(long, default_value_t = false)]
+    disable_viz: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -166,13 +214,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load config first to determine output directory
     let config_path = &cli.config;
-    let config: SimConfig = match load_pkl(config_path) {
+    let mut config: SimConfig = match load_pkl(config_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Failed to load pkl config {}: {}", config_path, e);
             return Err(e.into());
         }
     };
+
+    if cli.disable_viz {
+        config.viz.enabled = false;
+    }
 
     // Setup output directory
     let output_dir = &config.output_config.dir;
@@ -187,6 +239,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     std::fs::create_dir_all(&result_dir)?;
+
+    let sim_start = Instant::now();
+    let mut iteration_logs: Vec<IterationLog> = Vec::new();
 
     // Setup logging
     let log_path = result_dir.join("simulation.log");
@@ -259,32 +314,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Running CBBA iterations...\n");
 
     // Visualize initial state (Iteration 0)
-    render_visualization(
-        &result_dir.join(format!("iteration_{}.png", 0)),
-        "Iteration 0",
-        &cbbas,
-        &tasks,
-        &config.viz,
-    )?;
+    if config.viz.enabled {
+        render_visualization(
+            &result_dir.join("iter_00_initial.png"),
+            "Iteration 0 (initial)",
+            &cbbas,
+            &tasks,
+            &config.viz,
+        )?;
+    }
 
     while !converged && iteration < 100 {
         iteration += 1;
         info!("--- Iteration {} ---", iteration);
 
-        // Track convergence for this iteration
-        // If NO agent changes its bundle or bids, we are converged.
-        // However, CBBA convergence is technically when bundles stop changing.
-        // But bid updates might continue for a bit.
-        // Let's track if any agent modifies its bundle OR its internal state significantly.
+        let iter_start = Instant::now();
         let mut any_change = false;
 
         // Phase 1: Bundle Construction
+        let mut added_per_agent: HashMap<_, Vec<_>> = HashMap::new();
+        let bundle_phase_start = Instant::now();
         for cbba in &mut cbbas {
             let added = cbba.bundle_construction_phase(Some(&tasks))?;
             if !added.is_empty() {
                 any_change = true;
-                // info!("  {} added tasks: {}", cbba.agent, added);
             }
+            added_per_agent.insert(cbba.agent.id, added.0);
+        }
+        let bundle_stage_ms = bundle_phase_start.elapsed().as_secs_f64() * 1000.0;
+
+        let bundle_snapshot: Vec<_> = cbbas.iter().cloned().collect();
+        if config.viz.enabled {
+            render_visualization(
+                &result_dir.join(format!("iter_{:02}_bundle.png", iteration)),
+                &format!("Iteration {} (bundle)", iteration),
+                &bundle_snapshot,
+                &tasks,
+                &config.viz,
+            )?;
         }
 
         // Phase 2: Exchange winning information
@@ -298,38 +365,121 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Apply consensus / conflict resolution
+        let consensus_phase_start = Instant::now();
+        let mut released_per_agent: HashMap<_, Vec<TaskReleaseRecord>> = HashMap::new();
         for cbba in &mut cbbas {
             let dropped = cbba.consensus_phase(&all_messages);
             if !dropped.is_empty() {
                 any_change = true;
                 cbba_log::log_dropped_tasks(cbba, &dropped);
             }
+            let records: Vec<TaskReleaseRecord> = dropped
+                .0
+                .into_iter()
+                .map(|(task_id, successors)| TaskReleaseRecord {
+                    task_id: task_id.0,
+                    successors: successors.into_iter().map(|s| s.0).collect(),
+                })
+                .collect();
+            if !records.is_empty() {
+                released_per_agent.insert(cbba.agent.id, records);
+            }
         }
+        let consensus_stage_ms = consensus_phase_start.elapsed().as_secs_f64() * 1000.0;
 
         if !any_change {
             converged = true;
         }
 
-        // Visualize this iteration
+        let iteration_ms = iter_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Visualize this iteration
-        render_visualization(
-            &result_dir.join(format!("iteration_{}.png", iteration)),
-            &format!("Iteration {}", iteration),
-            &cbbas,
-            &tasks,
-            &config.viz,
-        )?;
+        let mut agent_logs = Vec::new();
+        for cbba in &cbbas {
+            let added = added_per_agent
+                .remove(&cbba.agent.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.0)
+                .collect();
+            let released = released_per_agent
+                .remove(&cbba.agent.id)
+                .unwrap_or_default();
+            let bundle_ids = cbba.bundle.iter().map(|t| t.id().0).collect();
+            let path_ids = cbba.path.iter().map(|t| t.id().0).collect();
+            agent_logs.push(AgentIterationLog {
+                agent_id: cbba.agent.id.0,
+                added_tasks: added,
+                released_tasks: released,
+                bundle: bundle_ids,
+                path: path_ids,
+            });
+        }
 
-        // Print status for each agent at the end of the iteration
+        iteration_logs.push(IterationLog {
+            iteration,
+            bundle_stage_ms,
+            consensus_stage_ms,
+            iteration_ms,
+            converged_after_this: converged,
+            agents: agent_logs,
+        });
+
+        if config.viz.enabled {
+            render_visualization(
+                &result_dir.join(format!("iter_{:02}_consensus.png", iteration)),
+                &format!("Iteration {} (consensus)", iteration),
+                &cbbas,
+                &tasks,
+                &config.viz,
+            )?;
+        }
+
         cbba_log::log_iteration_status(&cbbas, iteration);
     }
 
     cbba_log::log_final_status(&cbbas);
     cbba_log::log_assignment_table(&cbbas, &tasks);
 
-    info!("Visualization saved to {}", result_dir.display());
+    let mut task_assignments: HashMap<u32, Option<u32>> =
+        tasks.iter().map(|t| (t.id().0, None)).collect();
+    for cbba in &cbbas {
+        for task in &cbba.bundle {
+            task_assignments.insert(task.id().0, Some(cbba.agent.id.0));
+        }
+    }
+
+    let mut final_assignments: Vec<_> = task_assignments
+        .into_iter()
+        .map(|(task_id, agent_id)| FinalAssignment { task_id, agent_id })
+        .collect();
+    final_assignments.sort_by_key(|a| a.task_id);
+
+    let total_duration_ms = sim_start.elapsed().as_secs_f64() * 1000.0;
+    let time_per_iteration_ms = if iteration > 0 {
+        total_duration_ms / (iteration as f64)
+    } else {
+        0.0
+    };
+    let agent_count = cbbas.len();
+    let task_count = tasks.len();
+
+    let report = SimulationReport {
+        iterations: iteration_logs,
+        final_assignments,
+        total_duration_ms,
+        time_per_iteration_ms,
+        agent_count,
+        task_count,
+    };
+
+    let summary_path = result_dir.join("summary.json");
+    let mut summary_file = File::create(&summary_path)?;
+    serde_json::to_writer_pretty(&mut summary_file, &report)?;
+
+    info!(
+        "Visualization and JSON summary saved to {} (summary.json)",
+        result_dir.display()
+    );
 
     Ok(())
 }

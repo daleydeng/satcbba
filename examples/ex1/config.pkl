@@ -2,7 +2,7 @@ data {
   satellites {
     mode = "random"
     random {
-        count = 3
+        count = 6
         speed = 28000
     }
   }
@@ -10,7 +10,7 @@ data {
   tasks {
     mode = "random"
     random {
-        count = 5
+        count = 20
         score_range = List(10.0, 1000.0)
         duration_range = List(60.0, 600.0)
     }
@@ -18,9 +18,13 @@ data {
 }
 
 viz {
+  enabled = true
   enable_map = true
   show_task_info = true
   show_path_time = true
+  image_size = List(1920, 960)
+  font_size = 24.0
+  line_thickness = 4
 }
 
 algo {

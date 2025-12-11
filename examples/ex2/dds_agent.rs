@@ -7,17 +7,17 @@
 //! and communicates with other agents for consensus.
 
 use anyhow::{Context, Result, anyhow};
-use cbbadds::CBBA;
-use cbbadds::config::load_pkl;
-use cbbadds::consensus::types::ConsensusMessage;
-use cbbadds::dds::transport::AgentWriter;
-use cbbadds::dds::{AgentCommand, AgentPhase, AgentReply, create_common_qos};
-use cbbadds::sat::load_satellites;
-use cbbadds::sat::score::SatelliteScoreFunction;
-use cbbadds::sat::types::{ExploreTask, Satellite};
 use clap::Parser;
 use futures::StreamExt;
 use rustdds::with_key::Sample;
+use satcbba::CBBA;
+use satcbba::config::load_pkl;
+use satcbba::consensus::types::ConsensusMessage;
+use satcbba::dds::transport::AgentWriter;
+use satcbba::dds::{AgentCommand, AgentPhase, AgentReply, create_common_qos};
+use satcbba::sat::load_satellites;
+use satcbba::sat::score::SatelliteScoreFunction;
+use satcbba::sat::types::{ExploreTask, Satellite};
 use std::path::Path;
 use tracing::{debug, info, warn};
 use tracing_subscriber;
@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
 pub async fn run(agent_id: u32, config: Config) -> Result<()> {
     // Load satellite configuration
     let satellites = match &config.data.satellites {
-        SatSourceConfig::Random(cfg) => cbbadds::sat::generate_random_satellites(cfg),
+        SatSourceConfig::Random(cfg) => satcbba::sat::generate_random_satellites(cfg),
         SatSourceConfig::File(cfg) => {
             load_satellites(Path::new(&cfg.path)).context("Failed to load satellites from file")?
         }
@@ -104,7 +104,7 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
     let qos = create_common_qos();
 
     // Get Writer and Reader parts
-    let (network_writer, network_reader) = cbbadds::dds::transport::new_agent_transport::<
+    let (network_writer, network_reader) = satcbba::dds::transport::new_agent_transport::<
         CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
         ExploreTask,
     >(agent.id, domain_id, qos);
@@ -156,8 +156,12 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
 }
 
 async fn handle_syncer_message(
-    msg: AgentCommand<ExploreTask, ConsensusMessage, CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
-    agent_id: cbbadds::consensus::types::AgentId,
+    msg: AgentCommand<
+        ExploreTask,
+        ConsensusMessage,
+        CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
+    >,
+    agent_id: satcbba::consensus::types::AgentId,
     ctx: &mut AgentContext,
     cbba: &mut Option<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
     network_writer: &AgentWriter<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
@@ -188,9 +192,9 @@ async fn handle_syncer_message(
             network_writer.publish_reply_to_syncer(reply)?;
         }
         AgentCommand::BundlingConstruction { request_id, tasks } => {
-            let cbba = cbba
-                .as_mut()
-                .ok_or_else(|| anyhow!("CBBA not initialized; missing initialization from syncer"))?;
+            let cbba = cbba.as_mut().ok_or_else(|| {
+                anyhow!("CBBA not initialized; missing initialization from syncer")
+            })?;
             ctx.iteration += 1;
             network_writer.publish_status(AgentPhase::BundlingConstructing)?;
             info!(
@@ -225,13 +229,15 @@ async fn handle_syncer_message(
                 phase: AgentPhase::BundlingConstructingComplete(added.clone()),
             };
             network_writer.publish_reply_to_syncer(reply)?;
-            network_writer
-                .publish_status(AgentPhase::BundlingConstructingComplete(added))?;
+            network_writer.publish_status(AgentPhase::BundlingConstructingComplete(added))?;
         }
-        AgentCommand::ConflictResolution { request_id, messages } => {
-            let cbba = cbba
-                .as_mut()
-                .ok_or_else(|| anyhow!("CBBA not initialized; missing initialization from syncer"))?;
+        AgentCommand::ConflictResolution {
+            request_id,
+            messages,
+        } => {
+            let cbba = cbba.as_mut().ok_or_else(|| {
+                anyhow!("CBBA not initialized; missing initialization from syncer")
+            })?;
             network_writer.publish_status(AgentPhase::ConflictResolving)?;
             info!(
                 "Starting Conflict Resolution Phase (iteration {})",
@@ -265,13 +271,12 @@ async fn handle_syncer_message(
                 phase: AgentPhase::ConflictResolvingComplete(dropped_tasks.clone()),
             };
             network_writer.publish_reply_to_syncer(reply)?;
-            network_writer
-                .publish_status(AgentPhase::ConflictResolvingComplete(dropped_tasks))?;
+            network_writer.publish_status(AgentPhase::ConflictResolvingComplete(dropped_tasks))?;
         }
         AgentCommand::Terminate { request_id } => {
-            let cbba = cbba
-                .as_ref()
-                .ok_or_else(|| anyhow!("CBBA not initialized; missing initialization from syncer"))?;
+            let cbba = cbba.as_ref().ok_or_else(|| {
+                anyhow!("CBBA not initialized; missing initialization from syncer")
+            })?;
             network_writer.publish_status(AgentPhase::Terminating)?;
 
             let reply = AgentReply {

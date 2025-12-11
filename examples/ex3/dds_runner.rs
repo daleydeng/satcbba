@@ -12,6 +12,10 @@ struct Cli {
     #[arg(long, default_value_t = 3)]
     interval: u64,
 
+    /// DDS domain id to use
+    #[arg(long, default_value_t = 0)]
+    domain: u16,
+
     /// Number of agents to spawn
     #[arg(long, default_value_t = 3)]
     agents: u32,
@@ -19,6 +23,7 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
+    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| LOG_FILTER.to_string());
     println!(
         "ex3_dds_runner: launching 1 syncer (interval={}s) and {} agents as child processes...",
         cli.interval, cli.agents
@@ -35,7 +40,9 @@ fn main() {
     for i in 1..=cli.agents {
         let child = Command::new(&agent_path)
             .arg(i.to_string())
-            .env("RUST_LOG", LOG_FILTER)
+            .arg("--domain")
+            .arg(cli.domain.to_string())
+            .env("RUST_LOG", &log_filter)
             .spawn()
             .unwrap_or_else(|e| panic!("Failed to start {:?} for agent {}: {}", agent_path, i, e));
         agents.push(child);
@@ -49,7 +56,9 @@ fn main() {
     let mut syncer = Command::new(&syncer_path)
         .arg("--interval")
         .arg(cli.interval.to_string())
-        .env("RUST_LOG", LOG_FILTER)
+        .arg("--domain")
+        .arg(cli.domain.to_string())
+        .env("RUST_LOG", &log_filter)
         .spawn()
         .unwrap_or_else(|e| panic!("Failed to start {:?}: {}", syncer_path, e));
 

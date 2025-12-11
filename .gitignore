@@ -9,3 +9,4 @@ tmp/
 
 results/
 npcap-sdk*/
+.venv/

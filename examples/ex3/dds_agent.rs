@@ -1,17 +1,31 @@
-use cbbadds::consensus::types::AgentId;
-use cbbadds::dds::transport::new_agent_transport;
-use cbbadds::dds::types::{AgentStatus, Event};
-use cbbadds::dds::utils::create_common_qos;
+use clap::Parser;
 use futures::StreamExt;
 use rustdds::StatusEvented;
+use satcbba::consensus::types::AgentId;
+use satcbba::dds::transport::new_agent_transport;
+use satcbba::dds::types::{AgentStatus, Event};
+use satcbba::dds::utils::create_common_qos;
 use serde_json::json;
-use std::env;
 use tokio;
 use tracing::{debug, error, info};
 use tracing_subscriber;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about = "ex3 DDS Agent", long_about = None)]
+struct Cli {
+    /// Agent ID (unique per process)
+    #[arg(value_name = "AGENT_ID", default_value_t = 1)]
+    agent_id: u32,
+
+    /// DDS domain id to join
+    #[arg(long, default_value_t = 0)]
+    domain: u16,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
     // Initialize tracing subscriber so `RUST_LOG` controls logging (including rustdds)
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -22,16 +36,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .try_init();
-    let args: Vec<String> = env::args().collect();
-    let agent_id: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let agent_id = cli.agent_id;
+    let domain_id = cli.domain;
 
-    info!("[Agent {}] Starting Agent...", agent_id);
+    info!(
+        "[Agent {}] Starting Agent on domain {}...",
+        agent_id, domain_id
+    );
 
-    let domain_id = 42u16;
     let qos = create_common_qos();
 
     debug!("[Agent {}] Creating transport...", agent_id);
-    let (agent_writer, agent_reader) = new_agent_transport::<AgentStatus, cbbadds::sat::ExploreTask>(
+    let (agent_writer, agent_reader) = new_agent_transport::<AgentStatus, satcbba::sat::ExploreTask>(
         AgentId(agent_id),
         domain_id,
         qos,

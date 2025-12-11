@@ -8,29 +8,29 @@
 //! 2. Collects agent status
 //! 3. Reports system status to Manager
 
-use cbbadds::config::load_pkl;
-use cbbadds::consensus::types::AgentId;
-use cbbadds::sat::score::SatelliteScoreFunction;
-use cbbadds::sat::types::Satellite;
-use cbbadds::CBBA;
-use cbbadds::{
+use chrono::Local;
+use clap::Parser;
+use futures::StreamExt;
+use rustdds::with_key::Sample;
+use satcbba::CBBA;
+use satcbba::config::load_pkl;
+use satcbba::consensus::types::AgentId;
+use satcbba::sat::score::SatelliteScoreFunction;
+use satcbba::sat::types::Satellite;
+use satcbba::{
     dds::{AgentCommand, AgentPhase, AgentReply, AgentStatus, create_common_qos},
     sat::{
         ExploreTask, generate_random_tasks, load_satellites, load_tasks, render_visualization,
         save_satellites, save_tasks,
     },
 };
-use chrono::Local;
-use clap::Parser;
-use futures::StreamExt;
-use rustdds::with_key::Sample;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::time::{Duration, Instant};
-use uuid::Uuid;
 use tracing_subscriber;
+use uuid::Uuid;
 
 #[path = "config.rs"]
 pub mod config;
@@ -88,7 +88,7 @@ pub async fn run(
     // --- Load Satellites (for verification/output) ---
     let satellites = match &config.data.satellites {
         SatSourceConfig::Random(cfg) => {
-            let sats = cbbadds::sat::generate_random_satellites(cfg);
+            let sats = satcbba::sat::generate_random_satellites(cfg);
             let path = result_dir.join("satellites.json");
             if let Err(e) = save_satellites(&sats, &path) {
                 println!("Warning: failed to save satellites: {e}");
@@ -145,7 +145,7 @@ pub async fn run(
     // --- DDS Setup ---
     let domain_id = config.dds.domain_id;
     let qos = create_common_qos();
-    let (network_writer, network_reader) = cbbadds::dds::transport::new_syncer_transport::<
+    let (network_writer, network_reader) = satcbba::dds::transport::new_syncer_transport::<
         CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
         ExploreTask,
     >(domain_id, qos);
@@ -188,7 +188,10 @@ pub async fn run(
                 })
                 .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
         } else {
-            println!("Warning: no satellite definition found for agent {}", agent_id.0);
+            println!(
+                "Warning: no satellite definition found for agent {}",
+                agent_id.0
+            );
         }
     }
 
@@ -210,10 +213,11 @@ pub async fn run(
 
         // Phase 1: Bundle Construction
         let bundle_request_id = format!("bundle-{}-{}", iteration, Uuid::new_v4());
-        network_writer.publish_syncer_request(AgentCommand::BundlingConstruction {
-            request_id: bundle_request_id.clone(),
-            tasks: Some(tasks.clone()),
-        })
+        network_writer
+            .publish_syncer_request(AgentCommand::BundlingConstruction {
+                request_id: bundle_request_id.clone(),
+                tasks: Some(tasks.clone()),
+            })
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
         let bundle_deadline = Instant::now() + phase_timeout;
@@ -250,10 +254,11 @@ pub async fn run(
 
         // Phase 2: Conflict Resolution
         let conflict_request_id = format!("conflict-{}-{}", iteration, Uuid::new_v4());
-        network_writer.publish_syncer_request(AgentCommand::ConflictResolution {
-            request_id: conflict_request_id.clone(),
-            messages: None,
-        })
+        network_writer
+            .publish_syncer_request(AgentCommand::ConflictResolution {
+                request_id: conflict_request_id.clone(),
+                messages: None,
+            })
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
         let conflict_deadline = Instant::now() + phase_timeout;
@@ -354,9 +359,9 @@ pub async fn run(
 
 async fn run_handshake(
     ready_agents: &mut HashSet<AgentId>,
-    agent_status_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
-    reply_to_syncer_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
-    network_writer: &cbbadds::dds::transport::SyncerWriter<
+    agent_status_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
+    reply_to_syncer_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
+    network_writer: &satcbba::dds::transport::SyncerWriter<
         ExploreTask,
         CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
     >,
@@ -441,10 +446,12 @@ async fn collect_phase_replies(
     request_id: &str,
     expected_agents: &HashSet<AgentId>,
     ready_agents: &mut HashSet<AgentId>,
-    agent_status_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
-    agent_state_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
+    agent_status_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
+    agent_state_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<
+        CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
+    >,
     latest_states: &mut HashMap<AgentId, CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
-    reply_to_syncer_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
+    reply_to_syncer_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
     deadline: Instant,
 ) -> HashMap<AgentId, AgentReply> {
     let mut replies = HashMap::new();
@@ -491,8 +498,8 @@ async fn collect_phase_replies(
 
 async fn await_agent_termination(
     ready_agents: &HashSet<AgentId>,
-    agent_status_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
-    reply_to_syncer_stream: &mut cbbadds::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
+    agent_status_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
+    reply_to_syncer_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
     timeout: Duration,
     terminate_request_id: &str,
 ) {

@@ -9,9 +9,9 @@
 //!
 //! It simulates a full deployment on a single machine using multiple processes.
 
-use cbbadds::config::load_pkl;
-use cbbadds::sat::load_satellites;
 use clap::Parser;
+use satcbba::config::load_pkl;
+use satcbba::sat::load_satellites;
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -44,9 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
         .unwrap_or_else(|| "dds_runner".to_string());
-    let prefix = exe_name
-        .strip_suffix("dds_runner")
-        .unwrap_or("");
+    let prefix = exe_name.strip_suffix("dds_runner").unwrap_or("");
     let syncer_example = format!("{}dds_syncer", prefix);
     let agent_example = format!("{}dds_agent", prefix);
 
@@ -69,7 +67,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Runner: Spawning Agent {}...", id);
 
         let agent = Command::new("cargo")
-            .args(&["run", "--example", &agent_example, "--", &id.to_string(), "--config", config_path])
+            .args(&[
+                "run",
+                "--example",
+                &agent_example,
+                "--",
+                &id.to_string(),
+                "--config",
+                config_path,
+            ])
             .spawn()
             .expect("Failed to spawn agent");
         children.push(("Agent", agent));
@@ -84,7 +90,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Spawn Syncer
     println!("Runner: Spawning Syncer...");
     let mut syncer_cmd = Command::new("cargo");
-    syncer_cmd.args(&["run", "--example", &syncer_example, "--", "--config", config_path]);
+    syncer_cmd.args(&[
+        "run",
+        "--example",
+        &syncer_example,
+        "--",
+        "--config",
+        config_path,
+    ]);
     if cli.terminate_agents {
         syncer_cmd.arg("--terminate-agents");
     }
@@ -121,7 +134,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if elapsed >= syncer_grace {
                     println!(
                         "Syncer finished; terminating remaining {} child(ren) after {:?} grace.",
-                        children.len(), syncer_grace
+                        children.len(),
+                        syncer_grace
                     );
                     for (name, child) in &mut children {
                         if let Err(e) = child.kill() {

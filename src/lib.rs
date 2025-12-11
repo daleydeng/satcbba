@@ -1,6 +1,6 @@
-//! # CBBADDS - CBAA/CBBA Library for Rust
+//! # satcbba - CBAA/CBBA Library for Rust
 //!
-//! CBBADDS is a Rust implementation of the Consensus-Based Auction Algorithm (CBAA)
+//! satcbba is a Rust implementation of the Consensus-Based Auction Algorithm (CBAA)
 //! and Consensus-Based Bundle Algorithm (CBBA) for distributed task allocation.
 //!
 //! ## Modules
@@ -16,20 +16,20 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use cbbadds::*;
+//! use satcbba::*;
 //! use serde::{Serialize, Deserialize};
 //!
 //! // Define your types
 //! #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 //! struct Task(u32);
-//! impl cbbadds::Task for Task {
-//!     fn id(&self) -> cbbadds::TaskId { cbbadds::TaskId(self.0) }
+//! impl satcbba::Task for Task {
+//!     fn id(&self) -> satcbba::TaskId { satcbba::TaskId(self.0) }
 //! }
 //!
 //! #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, Serialize, Deserialize, PartialOrd, Ord)]
 //! struct Agent(u32);
-//! impl cbbadds::Agent for Agent {
-//!     fn id(&self) -> cbbadds::AgentId { cbbadds::AgentId(self.0) }
+//! impl satcbba::Agent for Agent {
+//!     fn id(&self) -> satcbba::AgentId { satcbba::AgentId(self.0) }
 //! }
 //!
 //! // Implement score function
@@ -41,13 +41,13 @@
 //!     }
 //! }
 //!
-//! impl cbbadds::cbaa::ScoreFunction<Task, Agent> for SimpleScoreFunction {
+//! impl satcbba::cbaa::ScoreFunction<Task, Agent> for SimpleScoreFunction {
 //!     fn calc(&self, _agent: &Agent, task: &Task) -> Score {
 //!         Score(100 - task.0)
 //!     }
 //! }
 //!
-//! impl cbbadds::cbba::ScoreFunction<Task, Agent> for SimpleScoreFunction {
+//! impl satcbba::cbba::ScoreFunction<Task, Agent> for SimpleScoreFunction {
 //!     fn calc(&self, _agent: &Agent, task: &Task, _path: &[Task], _position: usize) -> Score {
 //!         Score(100 - task.0)
 //!     }
@@ -72,4 +72,3 @@ pub use consensus::*;
 pub use dds::*;
 pub use error::*;
 pub use sat::*;
-

@@ -2,10 +2,10 @@ use futures::StreamExt;
 use futures::future::join_all;
 use serde_json::json;
 
-use cbbadds::consensus::types::AgentId;
-use cbbadds::dds::transport::{new_agent_transport, new_syncer_transport};
-use cbbadds::dds::types::{AgentStatus, Event};
-use cbbadds::dds::utils::create_common_qos;
+use satcbba::consensus::types::AgentId;
+use satcbba::dds::transport::{new_agent_transport, new_syncer_transport};
+use satcbba::dds::types::{AgentStatus, Event};
+use satcbba::dds::utils::create_common_qos;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::timeout;
@@ -17,7 +17,7 @@ async fn run_syncer() {
     let domain_id = 0u16;
     let qos = create_common_qos();
     let (syncer_writer, syncer_reader) =
-        new_syncer_transport::<AgentStatus, cbbadds::sat::ExploreTask>(domain_id, qos);
+        new_syncer_transport::<AgentStatus, satcbba::sat::ExploreTask>(domain_id, qos);
     info!("[Inproc Syncer] Transport created");
     let mut agent_stream = syncer_reader.agent_event_stream;
     let mut ping_id: u64 = 0;
@@ -66,7 +66,7 @@ async fn run_agent(agent_id: u32) {
     info!("[Inproc Agent {}] Starting...", agent_id);
     let domain_id = 0u16;
     let qos = create_common_qos();
-    let (agent_writer, agent_reader) = new_agent_transport::<AgentStatus, cbbadds::sat::ExploreTask>(
+    let (agent_writer, agent_reader) = new_agent_transport::<AgentStatus, satcbba::sat::ExploreTask>(
         AgentId(agent_id),
         domain_id,
         qos,

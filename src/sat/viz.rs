@@ -1,8 +1,8 @@
 use super::score::SatelliteScoreFunction;
 use super::types::{ExploreTask, Satellite};
 use super::utils::{deg_from_e6, haversine_km};
-use crate::consensus::types::{BidInfo, Task as TaskTrait, TaskId};
 use crate::CBBA;
+use crate::consensus::types::{BidInfo, Task as TaskTrait, TaskId};
 use plotters::coord::types::RangedCoordf64;
 use plotters::prelude::*;
 use plotters::style::PaletteColor;
@@ -175,7 +175,14 @@ fn draw_path(
         }
 
         if options.show_path_time {
-            draw_travel_time(chart, color, cbba.agent.speed_kmph as f64, prev_pos, task_pos, wrapped)?;
+            draw_travel_time(
+                chart,
+                color,
+                cbba.agent.speed_kmph as f64,
+                prev_pos,
+                task_pos,
+                wrapped,
+            )?;
         }
 
         draw_bid_info(chart, &cbba.bids, task_pos, task.id())?;
@@ -204,8 +211,16 @@ fn draw_wrapped_segment(
     from: Coord,
     to: Coord,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let dist_to_edge = if from.0 > 0.0 { 180.0 - from.0 } else { 180.0 + from.0 };
-    let dist_from_edge = if to.0 > 0.0 { 180.0 - to.0 } else { 180.0 + to.0 };
+    let dist_to_edge = if from.0 > 0.0 {
+        180.0 - from.0
+    } else {
+        180.0 + from.0
+    };
+    let dist_from_edge = if to.0 > 0.0 {
+        180.0 - to.0
+    } else {
+        180.0 + to.0
+    };
     let total_x_dist = dist_to_edge + dist_from_edge;
     let fraction = dist_to_edge / total_x_dist;
     let y_edge = from.1 + (to.1 - from.1) * fraction;

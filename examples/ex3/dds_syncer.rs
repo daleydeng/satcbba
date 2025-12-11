@@ -1,9 +1,9 @@
-use cbbadds::dds::transport::new_syncer_transport;
-use cbbadds::dds::types::Event;
-use cbbadds::dds::utils::create_common_qos;
 use clap::Parser;
 use futures::StreamExt;
 use rustdds::StatusEvented;
+use satcbba::dds::transport::new_syncer_transport;
+use satcbba::dds::types::Event;
+use satcbba::dds::utils::create_common_qos;
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Duration;
@@ -16,11 +16,16 @@ struct Args {
     /// Ping interval in seconds
     #[arg(long, default_value_t = 3)]
     interval: u64,
+
+    /// DDS domain id to use
+    #[arg(long, default_value_t = 0)]
+    domain: u16,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let domain_id = args.domain;
     // Initialize tracing subscriber so `RUST_LOG` controls logging (including rustdds)
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -31,19 +36,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .try_init();
-    info!("[Syncer] Starting Syncer (ex3 ping/pong)...");
-
-    let domain_id = 42u16;
+    info!(
+        "[Syncer] Starting Syncer (ex3 ping/pong) on domain {} with interval {}s",
+        domain_id, args.interval
+    );
     let qos = create_common_qos();
 
     // Use transport helper to get writers/readers
     debug!("[Syncer] Creating transport...");
-    let (syncer_writer, syncer_reader) =
-        new_syncer_transport::<cbbadds::dds::types::AgentStatus, cbbadds::sat::ExploreTask>(
-            domain_id,
-            qos,
-        );
+    let (syncer_writer, syncer_reader) = new_syncer_transport::<
+        satcbba::dds::types::AgentStatus,
+        satcbba::sat::ExploreTask,
+    >(domain_id, qos);
     info!("[Syncer] Transport created. Listening for AgentEvents...");
+
+    // Give DDS discovery a moment to match writers/readers before first ping
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Writer status stream for debugging
     let mut writer_status_stream = syncer_writer.syncer_event_writer.as_async_status_stream();

@@ -97,8 +97,8 @@ impl AuctionState {
 /// # Examples
 ///
 /// ```
-/// use cbbadds::*;
-/// use cbbadds::cbaa::ScoreFunction;
+/// use satcbba::*;
+/// use satcbba::cbaa::ScoreFunction;
 /// use serde::{Serialize, Deserialize};
 ///
 /// #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

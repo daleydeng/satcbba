@@ -1,6 +1,6 @@
-use cbbadds::cbba::Config as CBBAConfig;
-use cbbadds::sat::data::{SatGenParams, SourceMode, TaskGenParams};
-use cbbadds::sat::viz::VizConfig;
+use satcbba::cbba::Config as CBBAConfig;
+use satcbba::sat::data::{SatGenParams, SourceMode, TaskGenParams};
+use satcbba::sat::viz::VizConfig;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]

@@ -1,5 +1,5 @@
 [package]
-name = "cbbadds"
+name = "satcbba"
 version = "0.1.0"
 edition = "2024"
 description = "Consensus-Based Auction Algorithm (CBAA) and Consensus-Based Bundle Algorithm (CBBA) implementations for distributed task allocation"
@@ -30,16 +30,12 @@ tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
-[build-dependencies]
-glob = "0.3"
-
-
 [dev-dependencies]
 # Dependencies only used for tests and examples
 
 [[example]]
-name = "sim_sat"
-path = "examples/ex1/sim_sat.rs"
+name = "ex1_sim_sat"
+path = "examples/ex1/ex1_sim_sat.rs"
 
 [[example]]
 name = "ex2_dds_agent"

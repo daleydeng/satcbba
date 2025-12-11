@@ -48,11 +48,8 @@ pub enum AgentCommand<T, M, S> {
         messages: Option<Vec<M>>,
     },
     /// Signal agents to terminate gracefully
-    Terminate {
-        request_id: String,
-    },
+    Terminate { request_id: String },
 }
-
 
 /// Agent Phase for Replies/Status (from Agent)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -97,6 +94,3 @@ impl Keyed for AgentReply {
         self.agent_id.0
     }
 }
-
-
-

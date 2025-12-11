@@ -1,24 +1,24 @@
 //! Satellite exploration example demonstrating CBAA usage with random generation and visualization
 
-use cbbadds::sat::data::{SatGenParams, SourceMode, TaskGenParams};
 use clap::Parser;
+use satcbba::sat::data::{SatGenParams, SourceMode, TaskGenParams};
 use serde::Deserialize;
 
-use cbbadds::config::load_pkl;
-use cbbadds::consensus::cbba::logging as cbba_log;
-use cbbadds::logger;
+use satcbba::config::load_pkl;
+use satcbba::consensus::cbba::logging as cbba_log;
+use satcbba::logger;
 use tracing::{info, warn};
 
-use cbbadds::CBBA;
-use cbbadds::cbba::Config as CBBAConfig;
-use cbbadds::consensus::types::ConsensusMessage;
-use cbbadds::sat::score::SatelliteScoreFunction;
-use cbbadds::sat::viz::VizConfig;
-use cbbadds::sat::{
+use chrono::Local;
+use satcbba::CBBA;
+use satcbba::cbba::Config as CBBAConfig;
+use satcbba::consensus::types::ConsensusMessage;
+use satcbba::sat::score::SatelliteScoreFunction;
+use satcbba::sat::viz::VizConfig;
+use satcbba::sat::{
     generate_random_satellites, generate_random_tasks, load_satellites, load_tasks,
     render_visualization, save_satellites, save_tasks,
 };
-use chrono::Local;
 use std::path::Path;
 
 #[derive(Debug, Deserialize, Clone)]

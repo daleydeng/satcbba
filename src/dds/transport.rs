@@ -3,8 +3,8 @@ use crate::consensus::types::Agent;
 use crate::consensus::types::{AgentId, ConsensusMessage, Task};
 use crate::dds::types::{
     AGENT_COMMAND_TOPIC, AGENT_CONSENSUS_TOPIC, AGENT_EVENT_TOPIC, AGENT_REPLY_TOPIC,
-    AGENT_STATE_TOPIC, AGENT_STATUS_TOPIC, AgentCommand, AgentPhase, AgentReply,
-    AgentStatus, Event, LOG_TOPIC, LogMessage, SYNCER_EVENT_TOPIC,
+    AGENT_STATE_TOPIC, AGENT_STATUS_TOPIC, AgentCommand, AgentPhase, AgentReply, AgentStatus,
+    Event, LOG_TOPIC, LogMessage, SYNCER_EVENT_TOPIC,
 };
 use crate::dds::utils::create_topic;
 use crate::error::Error;
@@ -192,22 +192,13 @@ where
         .create_datawriter(&agent_state_topic, None)
         .expect("Create state writer failed");
     let status_writer = publisher
-        .create_datawriter(
-            &agent_status_topic,
-            None,
-        )
+        .create_datawriter(&agent_status_topic, None)
         .expect("Create status writer failed");
     let consensus_writer = publisher
-        .create_datawriter(
-            &agent_consensus_topic,
-            None,
-        )
+        .create_datawriter(&agent_consensus_topic, None)
         .expect("Create consensus writer failed");
     let reply_to_syncer_writer = publisher
-        .create_datawriter(
-            &syncer_reply_topic,
-            None,
-        )
+        .create_datawriter(&syncer_reply_topic, None)
         .expect("Create reply to syncer writer failed");
 
     let agent_event_writer = publisher
@@ -220,17 +211,11 @@ where
 
     // Readers
     let peer_consensus_reader = subscriber
-        .create_datareader(
-            &agent_consensus_topic,
-            None,
-        )
+        .create_datareader(&agent_consensus_topic, None)
         .expect("Create peer consensus reader failed");
 
     let syncer_request_reader = subscriber
-        .create_datareader_no_key(
-            &syncer_request_topic,
-            None,
-        )
+        .create_datareader_no_key(&syncer_request_topic, None)
         .expect("Create syncer request reader failed");
 
     let syncer_event_reader = subscriber
@@ -238,10 +223,7 @@ where
         .expect("Create syncer event reader failed");
 
     let peer_agent_event_reader = subscriber
-        .create_datareader_no_key(
-            &agent_event_topic,
-            None,
-        )
+        .create_datareader_no_key(&agent_event_topic, None)
         .expect("Create peer agent event reader failed");
 
     // Async streams
@@ -323,7 +305,10 @@ where
 }
 
 /// DDS-based network handler implementation for Syncer
-pub fn new_syncer_transport<S, T>(domain_id: u16, qos: QosPolicies) -> (SyncerWriter<T, S>, SyncerReader<S>)
+pub fn new_syncer_transport<S, T>(
+    domain_id: u16,
+    qos: QosPolicies,
+) -> (SyncerWriter<T, S>, SyncerReader<S>)
 where
     S: Keyed + Serialize + DeserializeOwned + std::fmt::Debug + Send + 'static,
     <S as Keyed>::K: for<'de> serde::Deserialize<'de> + Serialize,
@@ -389,7 +374,8 @@ where
         TopicKind::WithKey,
     );
 
-    let syncer_request_writer = publisher.create_datawriter_no_key(&syncer_topic, None)
+    let syncer_request_writer = publisher
+        .create_datawriter_no_key(&syncer_topic, None)
         .expect("Create syncer writer failed");
 
     let syncer_event_writer = publisher
@@ -401,10 +387,7 @@ where
         .expect("Create log writer failed");
 
     let agent_status_reader = subscriber
-        .create_datareader(
-            &agent_status_topic,
-            None,
-        )
+        .create_datareader(&agent_status_topic, None)
         .expect("Create agent status reader failed");
 
     let agent_state_reader = subscriber
@@ -412,17 +395,11 @@ where
         .expect("Create agent state reader failed");
 
     let reply_to_syncer_reader = subscriber
-        .create_datareader(
-            &syncer_reply_topic,
-            None,
-        )
+        .create_datareader(&syncer_reply_topic, None)
         .expect("Create reply to syncer reader failed");
 
     let agent_event_reader = subscriber
-        .create_datareader_no_key(
-            &agent_event_topic,
-            None,
-        )
+        .create_datareader_no_key(&agent_event_topic, None)
         .expect("Create agent event reader failed");
 
     let writer = SyncerWriter {

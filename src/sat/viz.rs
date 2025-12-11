@@ -1,10 +1,8 @@
 use super::score::SatelliteScoreFunction;
 use super::types::{ExploreTask, Satellite};
 use super::utils::{deg_from_e6, haversine_km};
-use crate::CBBA;
 use crate::consensus::types::BidInfo;
-use image::{DynamicImage, Rgba, imageops::FilterType};
-use plotters::element::BitMapElement;
+use crate::CBBA;
 use plotters::prelude::*;
 use serde::Deserialize;
 use std::path::Path;
@@ -35,26 +33,7 @@ pub fn render_visualization(
         .y_label_area_size(50)
         .build_cartesian_2d(-180.0..180.0, -90.0..90.0)?;
 
-    // Draw background image if available and requested
-    if options.enable_map
-        && let Ok(bg_img) = image::open("images/map.png")
-    {
-        let (w, h) = chart.plotting_area().dim_in_pixel();
-        let mut resized_bg = bg_img.resize_exact(w, h, FilterType::Nearest).to_rgba8();
-
-        // Make background semi-transparent/lighter
-        for pixel in resized_bg.pixels_mut() {
-            let Rgba([r, g, b, a]) = *pixel;
-            // Reduce alpha to make it faded
-            *pixel = Rgba([r, g, b, (a as f32 * 0.15) as u8]);
-        }
-
-        // Map to chart coordinates: -180, 90 is top-left
-        chart.draw_series(std::iter::once(BitMapElement::from((
-            (-180.0, 90.0),
-            DynamicImage::ImageRgba8(resized_bg),
-        ))))?;
-    }
+        // Map overlay disabled: plotters bitmap API is currently incompatible with the image overlay path.
 
     chart.configure_mesh().draw()?;
 

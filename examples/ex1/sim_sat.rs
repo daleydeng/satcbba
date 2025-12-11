@@ -2,7 +2,7 @@
 
 use clap::Parser;
 use satcbba::sat::data::{SatGenParams, SourceMode, TaskGenParams};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use satcbba::config::load_pkl;
 use satcbba::consensus::cbba::logging as cbba_log;
@@ -14,6 +14,9 @@ use satcbba::CBBA;
 use satcbba::cbba::Config as CBBAConfig;
 use satcbba::consensus::types::{ConsensusMessage, Task};
 use satcbba::sat::score::SatelliteScoreFunction;
+use satcbba::sat::report::{
+    build_report, write_report_json, AgentIterationLog, IterationLog, TaskReleaseRecord,
+};
 use satcbba::sat::viz::VizConfig;
 use satcbba::sat::{
     generate_random_satellites, generate_random_tasks, load_satellites, load_tasks,
@@ -21,7 +24,6 @@ use satcbba::sat::{
 };
 use std::path::Path;
 use std::time::Instant;
-use std::fs::File;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -153,47 +155,6 @@ struct SimConfig {
     viz: VizConfig,
     output_config: OutputConfig,
     algo: AlgoConfig,
-}
-
-#[derive(Debug, Serialize)]
-struct TaskReleaseRecord {
-    task_id: u32,
-    successors: Vec<u32>,
-}
-
-#[derive(Debug, Serialize)]
-struct AgentIterationLog {
-    agent_id: u32,
-    added_tasks: Vec<u32>,
-    released_tasks: Vec<TaskReleaseRecord>,
-    bundle: Vec<u32>,
-    path: Vec<u32>,
-}
-
-#[derive(Debug, Serialize)]
-struct IterationLog {
-    iteration: usize,
-    bundle_stage_ms: f64,
-    consensus_stage_ms: f64,
-    iteration_ms: f64,
-    converged_after_this: bool,
-    agents: Vec<AgentIterationLog>,
-}
-
-#[derive(Debug, Serialize)]
-struct FinalAssignment {
-    task_id: u32,
-    agent_id: Option<u32>,
-}
-
-#[derive(Debug, Serialize)]
-struct SimulationReport {
-    iterations: Vec<IterationLog>,
-    final_assignments: Vec<FinalAssignment>,
-    total_duration_ms: f64,
-    time_per_iteration_ms: f64,
-    agent_count: usize,
-    task_count: usize,
 }
 
 #[derive(Parser)]
@@ -440,45 +401,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cbba_log::log_final_status(&cbbas);
     cbba_log::log_assignment_table(&cbbas, &tasks);
 
-    let mut task_assignments: HashMap<u32, Option<u32>> =
-        tasks.iter().map(|t| (t.id().0, None)).collect();
-    for cbba in &cbbas {
-        for task in &cbba.bundle {
-            task_assignments.insert(task.id().0, Some(cbba.agent.id.0));
-        }
-    }
-
-    let mut final_assignments: Vec<_> = task_assignments
-        .into_iter()
-        .map(|(task_id, agent_id)| FinalAssignment { task_id, agent_id })
-        .collect();
-    final_assignments.sort_by_key(|a| a.task_id);
-
-    let total_duration_ms = sim_start.elapsed().as_secs_f64() * 1000.0;
-    let time_per_iteration_ms = if iteration > 0 {
-        total_duration_ms / (iteration as f64)
-    } else {
-        0.0
-    };
-    let agent_count = cbbas.len();
-    let task_count = tasks.len();
-
-    let report = SimulationReport {
-        iterations: iteration_logs,
-        final_assignments,
-        total_duration_ms,
-        time_per_iteration_ms,
-        agent_count,
-        task_count,
-    };
-
-    let summary_path = result_dir.join("summary.json");
-    let mut summary_file = File::create(&summary_path)?;
-    serde_json::to_writer_pretty(&mut summary_file, &report)?;
+    let report = build_report(&cbbas, &tasks, iteration_logs, sim_start);
+    let summary_path = write_report_json(&report, &result_dir)?;
 
     info!(
-        "Visualization and JSON summary saved to {} (summary.json)",
-        result_dir.display()
+        "Visualization and JSON summary saved to {}",
+        summary_path.display()
     );
 
     Ok(())

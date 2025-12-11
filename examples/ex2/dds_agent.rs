@@ -6,12 +6,11 @@
 //! The agent listens for tasks and control signals from the syncer,
 //! and communicates with other agents for consensus.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use futures::StreamExt;
 use rustdds::with_key::Sample;
 use satcbba::CBBA;
-use satcbba::config::load_pkl;
 use satcbba::consensus::types::{AgentId, ConsensusMessage};
 use satcbba::dds::transport::AgentWriter;
 use satcbba::dds::{AgentCommand, AgentPhase, AgentReply, create_common_qos};
@@ -20,9 +19,7 @@ use satcbba::sat::types::{ExploreTask, Satellite};
 use tracing::{debug, info, warn};
 use tracing_subscriber;
 
-#[path = "config.rs"]
-pub mod config;
-use config::Config;
+// Configuration file no longer needed for the agent; domain_id is passed via CLI.
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -30,15 +27,16 @@ struct Cli {
     /// Agent ID
     agent_id: u32,
 
-    /// Path to configuration file
-    #[arg(long, default_value = "examples/ex2/config.pkl")]
-    config: String,
+    /// DDS domain id
+    #[arg(long, default_value_t = 0)]
+    domain_id: u16,
 }
 
 struct AgentContext {
     iteration: usize,
     consensus_buffer: Vec<ConsensusMessage>,
     pending_tasks: Option<Vec<ExploreTask>>,
+    cbba: Option<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
 }
 
 impl AgentContext {
@@ -47,6 +45,7 @@ impl AgentContext {
             iteration: 0,
             consensus_buffer: Vec::new(),
             pending_tasks: None,
+            cbba: None,
         }
     }
 
@@ -54,6 +53,7 @@ impl AgentContext {
         self.iteration = 0;
         self.consensus_buffer.clear();
         self.pending_tasks = None;
+        self.cbba = None;
     }
 }
 
@@ -71,12 +71,11 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let agent_id = cli.agent_id;
-    let config_path = &cli.config;
-    let config: Config = load_pkl(config_path).context("Failed to load configuration")?;
-    run(agent_id, config).await
+    let domain_id = cli.domain_id;
+    run(agent_id, domain_id).await
 }
 
-pub async fn run(agent_id: u32, config: Config) -> Result<()> {
+pub async fn run(agent_id: u32, domain_id: u16) -> Result<()> {
     let agent_identifier = AgentId(agent_id);
 
     info!(
@@ -85,7 +84,6 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
     );
 
     // --- DDS Setup ---
-    let domain_id = config.dds.domain_id;
     let qos = create_common_qos();
 
     // Get Writer and Reader parts
@@ -100,8 +98,6 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
     let mut consensus_stream = network_reader.peer_consensus_stream;
 
     // --- CBBA Setup ---
-    let mut cbba: Option<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>> = None;
-
     network_writer.publish_status(AgentPhase::Standby)?;
 
     let mut ctx = AgentContext::new();
@@ -113,13 +109,7 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
                 match result {
                     Ok(sample) => {
                         let msg = sample.into_value();
-                        handle_syncer_message(
-                            msg,
-                            agent_identifier,
-                            &mut ctx,
-                            &mut cbba,
-                            &network_writer,
-                        )
+                            handle_syncer_message(msg, agent_identifier, &mut ctx, &network_writer)
                         .await?;
                     }
                     Err(e) => warn!("Failed to read syncer request: {:?}", e),
@@ -148,7 +138,6 @@ async fn handle_syncer_message(
     >,
     agent_id: satcbba::consensus::types::AgentId,
     ctx: &mut AgentContext,
-    cbba: &mut Option<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
     network_writer: &AgentWriter<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
 ) -> Result<()> {
     match msg {
@@ -164,7 +153,7 @@ async fn handle_syncer_message(
                         initial_state.agent.lat_e6,
                         initial_state.agent.lon_e6
                     );
-                    *cbba = Some(initial_state);
+                    ctx.cbba = Some(initial_state);
                 } else {
                     return Ok(()); // not intended for this agent
                 }
@@ -183,7 +172,7 @@ async fn handle_syncer_message(
             network_writer.publish_reply_to_syncer(reply)?;
         }
         AgentCommand::BundlingConstruction { request_id, tasks } => {
-            let cbba = cbba.as_mut().ok_or_else(|| {
+            let cbba = ctx.cbba.as_mut().ok_or_else(|| {
                 anyhow!("CBBA not initialized; missing initialization from syncer")
             })?;
             ctx.iteration += 1;
@@ -226,7 +215,7 @@ async fn handle_syncer_message(
             request_id,
             messages,
         } => {
-            let cbba = cbba.as_mut().ok_or_else(|| {
+            let cbba = ctx.cbba.as_mut().ok_or_else(|| {
                 anyhow!("CBBA not initialized; missing initialization from syncer")
             })?;
             network_writer.publish_status(AgentPhase::ConflictResolving)?;
@@ -265,7 +254,7 @@ async fn handle_syncer_message(
             network_writer.publish_status(AgentPhase::ConflictResolvingComplete(dropped_tasks))?;
         }
         AgentCommand::Terminate { request_id } => {
-            let cbba = cbba.as_ref().ok_or_else(|| {
+            let cbba = ctx.cbba.as_ref().ok_or_else(|| {
                 anyhow!("CBBA not initialized; missing initialization from syncer")
             })?;
             network_writer.publish_status(AgentPhase::Terminating)?;

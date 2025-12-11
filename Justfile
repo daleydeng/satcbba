@@ -51,11 +51,11 @@ build-ex2-deps:
 build-ex2-runner: build-ex2-deps
 	@cargo build --release --example {{ex2_runner}}
 
-run-ex2-runner config="examples/ex2/config.pkl" terminate_agents='true': build-ex2-runner
-	@cargo run --release --example {{ex2_runner}} -- --config {{config}} --terminate-agents={{terminate_agents}}
+run-ex2-runner config="examples/ex2/config.pkl": build-ex2-runner
+	@cargo run --release --example {{ex2_runner}} -- --config {{config}} --terminate-agents
 
-run-ex2-agent agent_id='1' config="examples/ex2/config.pkl":
-	@cargo run --release --example {{ex2_agent}} -- {{agent_id}} --config {{config}}
+run-ex2-agent agent_id='1':
+	@cargo run --release --example {{ex2_agent}} -- {{agent_id}}
 
-run-ex2-syncer config="examples/ex2/config.pkl" terminate_agents='false':
-	@cargo run --release --example {{ex2_syncer}} -- --config {{config}} --terminate-agents={{terminate_agents}}
+run-ex2-syncer config="examples/ex2/config.pkl":
+	@cargo run --release --example {{ex2_syncer}} -- --config {{config}}

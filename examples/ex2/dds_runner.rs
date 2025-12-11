@@ -54,9 +54,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         SatSourceConfig::File(cfg) => load_satellites(Path::new(&cfg.path))?.len(),
     };
 
+    let domain_id = config.dds.domain_id;
+
     println!(
-        "Starting DDS Runner (Multi-Process) with config from {}",
-        config_path
+        "Starting DDS Runner (Multi-Process) with config from {} (domain_id={})",
+        config_path, domain_id
     );
     println!("Spawning {} Agents and 1 Syncer...", agent_count);
 
@@ -73,8 +75,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &agent_example,
                 "--",
                 &id.to_string(),
-                "--config",
-                config_path,
+                "--domain-id",
+                &domain_id.to_string(),
             ])
             .spawn()
             .expect("Failed to spawn agent");

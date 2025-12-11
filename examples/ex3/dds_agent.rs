@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let bytes = serde_json::to_vec(&payload)?;
                             let pong = Event { event_type: "pong".to_string(), data: bytes };
                             match agent_writer.publish_agent_event(pong) {
-                                Ok(_) => info!("[Agent {}] Sent pong (including {} peer pongs)", agent_id, peer_pongs.len()),
+                                Ok(_) => info!("[Agent {}] Sent pong {}", agent_id, ping_id),
                                 Err(e) => error!("[Agent {}] ERROR sending pong: {:?}", agent_id, e),
                             }
                         }
@@ -110,10 +110,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         debug!("[Agent {}] AgentEvent value: event_type={}", agent_id, ev.event_type);
                         if ev.event_type == "pong" {
                             if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&ev.data) {
-                                if let Some(id) = v.get("agent_id").and_then(|x| x.as_u64()) {
+                                let agent = v.get("agent_id").and_then(|x| x.as_u64());
+                                let ping = v.get("ping_id").and_then(|x| x.as_u64());
+                                if let (Some(id), Some(ping_id)) = (agent, ping) {
                                     if id as u32 != agent_id {
-                                        peer_pongs.push(format!("agent:{}", id));
-                                        info!("[Agent {}] Heard peer pong from {}", agent_id, id);
+                                        peer_pongs.push(format!("agent:{}:ping:{}", id, ping_id));
+                                        info!("[Agent {}] Heard pong {} from agent {}", agent_id, ping_id, id);
                                     }
                                 }
                             }

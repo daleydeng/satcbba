@@ -65,7 +65,9 @@ async fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("info,rustdds=warn,rustdds::rtps=warn")
+                tracing_subscriber::EnvFilter::new(
+                    "info,rustdds=warn,rustdds::rtps=warn,rustdds::network::udp_sender=error",
+                )
             }),
         )
         .try_init();
@@ -113,9 +115,7 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
     let mut consensus_stream = network_reader.peer_consensus_stream;
 
     // --- CBBA Setup ---
-    let config_cbba = config.algo.cbba.clone();
-    let score_function = SatelliteScoreFunction;
-    let mut cbba = CBBA::new(agent, score_function, Vec::new(), Some(config_cbba));
+    let mut cbba: Option<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>> = None;
 
     network_writer.publish_status(AgentPhase::Standby)?;
 
@@ -128,7 +128,14 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
                 match result {
                     Ok(sample) => {
                         let msg = sample.into_value();
-                        handle_syncer_message(msg, &mut ctx, &mut cbba, &network_writer).await?;
+                        handle_syncer_message(
+                            msg,
+                            agent.id,
+                            &mut ctx,
+                            &mut cbba,
+                            &network_writer,
+                        )
+                        .await?;
                     }
                     Err(e) => warn!("Failed to read syncer request: {:?}", e),
                 }
@@ -150,8 +157,9 @@ pub async fn run(agent_id: u32, config: Config) -> Result<()> {
 
 async fn handle_syncer_message(
     msg: AgentCommand<ExploreTask, ConsensusMessage, CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
+    agent_id: cbbadds::consensus::types::AgentId,
     ctx: &mut AgentContext,
-    cbba: &mut CBBA<ExploreTask, Satellite, SatelliteScoreFunction>,
+    cbba: &mut Option<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
     network_writer: &AgentWriter<CBBA<ExploreTask, Satellite, SatelliteScoreFunction>>,
 ) -> Result<()> {
     match msg {
@@ -159,21 +167,30 @@ async fn handle_syncer_message(
             network_writer.publish_status(AgentPhase::Initializing)?;
             ctx.reset();
             if let Some(initial_state) = state {
-                *cbba = initial_state;
+                // Each agent picks its matching state; ignore others
+                if initial_state.agent.id == agent_id {
+                    *cbba = Some(initial_state);
+                } else {
+                    return Ok(()); // not intended for this agent
+                }
             } else {
-                cbba.clear();
+                // Handshake-only init; no CBBA yet
             }
+
             network_writer.publish_status(AgentPhase::Initialized)?;
 
             let reply = AgentReply {
                 request_id,
-                agent_id: cbba.agent.id,
+                agent_id,
                 iteration: ctx.iteration,
                 phase: AgentPhase::Initialized,
             };
             network_writer.publish_reply_to_syncer(reply)?;
         }
         AgentCommand::BundlingConstruction { request_id, tasks } => {
+            let cbba = cbba
+                .as_mut()
+                .ok_or_else(|| anyhow!("CBBA not initialized; missing initialization from syncer"))?;
             ctx.iteration += 1;
             network_writer.publish_status(AgentPhase::BundlingConstructing)?;
             info!(
@@ -212,6 +229,9 @@ async fn handle_syncer_message(
                 .publish_status(AgentPhase::BundlingConstructingComplete(added))?;
         }
         AgentCommand::ConflictResolution { request_id, messages } => {
+            let cbba = cbba
+                .as_mut()
+                .ok_or_else(|| anyhow!("CBBA not initialized; missing initialization from syncer"))?;
             network_writer.publish_status(AgentPhase::ConflictResolving)?;
             info!(
                 "Starting Conflict Resolution Phase (iteration {})",
@@ -249,6 +269,9 @@ async fn handle_syncer_message(
                 .publish_status(AgentPhase::ConflictResolvingComplete(dropped_tasks))?;
         }
         AgentCommand::Terminate { request_id } => {
+            let cbba = cbba
+                .as_ref()
+                .ok_or_else(|| anyhow!("CBBA not initialized; missing initialization from syncer"))?;
             network_writer.publish_status(AgentPhase::Terminating)?;
 
             let reply = AgentReply {

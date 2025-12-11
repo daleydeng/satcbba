@@ -30,6 +30,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
+use tracing_subscriber;
 
 #[path = "config.rs"]
 pub mod config;
@@ -49,6 +50,16 @@ pub struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(
+                    "info,rustdds=warn,rustdds::rtps=warn,rustdds::network::udp_sender=error",
+                )
+            }),
+        )
+        .try_init();
+
     let cli = Cli::parse();
     let config_path = &cli.config;
     let config: Config = load_pkl(config_path)?;
@@ -75,7 +86,7 @@ pub async fn run(
     println!("Results will be saved to: {}", result_dir.display());
 
     // --- Load Satellites (for verification/output) ---
-    let _satellites = match &config.data.satellites {
+    let satellites = match &config.data.satellites {
         SatSourceConfig::Random(cfg) => {
             let sats = cbbadds::sat::generate_random_satellites(cfg);
             let path = result_dir.join("satellites.json");
@@ -97,6 +108,37 @@ pub async fn run(
             load_satellites(path)?
         }
     };
+
+    // --- Load Tasks (shared across iterations) ---
+    let tasks = match &config.data.tasks {
+        TaskSourceConfig::Random(cfg) => {
+            println!("Generating {} random tasks", cfg.count);
+            let tasks = generate_random_tasks(cfg);
+            let path = result_dir.join("tasks.json");
+            if let Err(e) = save_tasks(&tasks, &path) {
+                println!("Warning: failed to save tasks: {e}");
+            }
+            tasks
+        }
+        TaskSourceConfig::File(cfg) => {
+            println!("Loading tasks from file: {}", cfg.path);
+            let path = Path::new(&cfg.path);
+            let dest = result_dir.join("tasks.json");
+            if let Err(e) = fs::copy(path, &dest) {
+                println!(
+                    "Warning: failed to copy tasks file {} -> {}: {e}",
+                    path.display(),
+                    dest.display()
+                );
+            }
+            load_tasks(path)?
+        }
+    };
+
+    if tasks.is_empty() {
+        println!("No tasks available; exiting.");
+        return Ok(());
+    }
 
     println!("Waiting for agents to come online via DDS discovery...");
 
@@ -128,35 +170,26 @@ pub async fn run(
     )
     .await?;
 
-    // --- Load Tasks (shared across iterations) ---
-    let tasks = match &config.data.tasks {
-        TaskSourceConfig::Random(cfg) => {
-            println!("Generating {} random tasks", cfg.count);
-            let tasks = generate_random_tasks(cfg);
-            let path = result_dir.join("tasks.json");
-            if let Err(e) = save_tasks(&tasks, &path) {
-                println!("Warning: failed to save tasks: {e}");
-            }
-            tasks
+    // --- Broadcast per-agent CBBA state from syncer ---
+    let cbba_config = config.algo.cbba.clone();
+    for agent_id in &ready_agents {
+        if let Some(agent) = satellites.iter().find(|s| &s.id == agent_id) {
+            let cbba = CBBA::new(
+                agent.clone(),
+                SatelliteScoreFunction,
+                tasks.clone(),
+                Some(cbba_config.clone()),
+            );
+            let init_request_id = format!("init-{}-{}", agent_id.0, Uuid::new_v4());
+            network_writer
+                .publish_syncer_request(AgentCommand::Initialization {
+                    request_id: init_request_id,
+                    state: Some(cbba),
+                })
+                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+        } else {
+            println!("Warning: no satellite definition found for agent {}", agent_id.0);
         }
-        TaskSourceConfig::File(cfg) => {
-            println!("Loading tasks from file: {}", cfg.path);
-            let path = Path::new(&cfg.path);
-            let dest = result_dir.join("tasks.json");
-            if let Err(e) = fs::copy(path, &dest) {
-                println!(
-                    "Warning: failed to copy tasks file {} -> {}: {e}",
-                    path.display(),
-                    dest.display()
-                );
-            }
-            load_tasks(path)?
-        }
-    };
-
-    if tasks.is_empty() {
-        println!("No tasks available; exiting.");
-        return Ok(());
     }
 
     // --- Iterative CBBA coordination over DDS ---

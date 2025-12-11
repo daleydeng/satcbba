@@ -3,6 +3,8 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::Duration;
 
+const LOG_FILTER: &str = "info,rustdds=warn,rustdds::rtps=warn,rustdds::network::udp_sender=error";
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Launch ex3 syncer and agents", long_about = None)]
 struct Cli {
@@ -33,6 +35,7 @@ fn main() {
     for i in 1..=cli.agents {
         let child = Command::new(&agent_path)
             .arg(i.to_string())
+            .env("RUST_LOG", LOG_FILTER)
             .spawn()
             .unwrap_or_else(|e| panic!("Failed to start {:?} for agent {}: {}", agent_path, i, e));
         agents.push(child);
@@ -46,6 +49,7 @@ fn main() {
     let mut syncer = Command::new(&syncer_path)
         .arg("--interval")
         .arg(cli.interval.to_string())
+        .env("RUST_LOG", LOG_FILTER)
         .spawn()
         .unwrap_or_else(|e| panic!("Failed to start {:?}: {}", syncer_path, e));
 

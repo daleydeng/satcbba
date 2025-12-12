@@ -192,7 +192,7 @@ pub async fn run(
     ))
     .await;
     let cbba_config = config.algo.cbba.clone();
-    for agent_id in &ready_agents {
+    for (idx, agent_id) in ready_agents.iter().enumerate() {
         let Some(agent) = satellites.iter().find(|s| &s.id == agent_id) else {
             println!(
                 "Warning: no satellite definition found for agent {}",
@@ -200,6 +200,14 @@ pub async fn run(
             );
             continue;
         };
+
+        // Optional pacing between per-agent initialization sends to avoid bursts.
+        if idx > 0 {
+            let per_agent_delay = Duration::from_millis(config.dds.init_per_agent_delay_ms);
+            if !per_agent_delay.is_zero() {
+                tokio::time::sleep(per_agent_delay).await;
+            }
+        }
 
         let cbba = CBBA::new(
             agent.clone(),
@@ -240,6 +248,7 @@ pub async fn run(
                 agent_id.0, init_timeout
             );
         }
+
     }
 
     // Explicit ready probe to ensure agents have applied initialization state.

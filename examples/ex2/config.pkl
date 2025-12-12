@@ -35,8 +35,8 @@ dds {
   max_iterations = 100
   // handshake_timeout_ms = 5000
   // terminate_agents_on_convergence = false
-  // init_broadcast_delay_ms = 300
-  // init_per_agent_delay_ms = 100
+  init_broadcast_delay_ms = 300
+  init_per_agent_delay_ms = 300
 }
 
 // viz: enabled, output_dir, file_name, image_size(List), enable_map, show_task_info,

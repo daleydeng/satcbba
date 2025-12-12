@@ -192,53 +192,55 @@ pub async fn run(
     ))
     .await;
     let cbba_config = config.algo.cbba.clone();
-    let mut init_requests: HashMap<AgentId, String> = HashMap::new();
     for agent_id in &ready_agents {
-        if let Some(agent) = satellites.iter().find(|s| &s.id == agent_id) {
-            let cbba = CBBA::new(
-                agent.clone(),
-                SatelliteScoreFunction,
-                tasks.clone(),
-                Some(cbba_config.clone()),
-            );
-            initial_snapshots.push(cbba.clone());
-            let init_request_id = format!("init-{}-{}", agent_id.0, Uuid::new_v4());
-            let init_request_id_for_map = init_request_id.clone();
-            println!(
-                "Sending initialization to agent {} (state agent {}, tasks={})",
-                agent_id.0,
-                cbba.agent.id().0,
-                cbba.current_tasks.len()
-            );
-            network_writer
-                .publish_syncer_request(AgentCommand {
-                    request_id: init_request_id,
-                    recipients: Some(vec![*agent_id]),
-                    payload: AgentCommandPayload::Initialization { state: cbba },
-                })
-                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-            init_requests.insert(*agent_id, init_request_id_for_map);
-
-            // Stagger init sends slightly to avoid bursts before all matches are ready.
-            tokio::time::sleep(Duration::from_millis(
-                config.dds.init_per_agent_delay_ms,
-            ))
-            .await;
-        } else {
+        let Some(agent) = satellites.iter().find(|s| &s.id == agent_id) else {
             println!(
                 "Warning: no satellite definition found for agent {}",
                 agent_id.0
             );
+            continue;
+        };
+
+        let cbba = CBBA::new(
+            agent.clone(),
+            SatelliteScoreFunction,
+            tasks.clone(),
+            Some(cbba_config.clone()),
+        );
+        initial_snapshots.push(cbba.clone());
+        let init_request_id = format!("init-{}-{}", agent_id.0, Uuid::new_v4());
+        println!(
+            "Sending initialization to agent {} (state agent {}, tasks={})",
+            agent_id.0,
+            cbba.agent.id().0,
+            cbba.current_tasks.len()
+        );
+        network_writer
+            .publish_syncer_request(AgentCommand {
+                request_id: init_request_id.clone(),
+                recipients: Some(vec![*agent_id]),
+                payload: AgentCommandPayload::Initialization { state: cbba },
+            })
+            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+
+        let init_timeout = Duration::from_millis(config.dds.handshake_timeout_ms);
+        if await_initialization_for_agent(
+            *agent_id,
+            &init_request_id,
+            &mut agent_status_stream,
+            &mut reply_to_syncer_stream,
+            init_timeout,
+        )
+        .await
+        {
+            println!("Agent {} acknowledged initialization.", agent_id.0);
+        } else {
+            println!(
+                "Warning: agent {} did not acknowledge initialization within {:?}.",
+                agent_id.0, init_timeout
+            );
         }
     }
-
-    await_initialization(
-        &init_requests,
-        &mut agent_status_stream,
-        &mut reply_to_syncer_stream,
-        Duration::from_millis(config.dds.handshake_timeout_ms),
-    )
-    .await;
 
     // Explicit ready probe to ensure agents have applied initialization state.
     await_ready(
@@ -608,45 +610,44 @@ async fn run_handshake(
     Ok(())
 }
 
-async fn await_initialization(
-    init_requests: &HashMap<AgentId, String>,
+async fn await_initialization_for_agent(
+    agent_id: AgentId,
+    request_id: &str,
     agent_status_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentStatus>,
     reply_to_syncer_stream: &mut satcbba::dds::transport::KeyedDdsDataReaderStream<AgentReply>,
-    _timeout: Duration,
-) {
+    timeout: Duration,
+) -> bool {
     use rustdds::with_key::Sample;
 
-    if init_requests.is_empty() {
-        return;
-    }
+    let deadline = Instant::now() + timeout;
 
-    let mut pending: HashSet<AgentId> = init_requests.keys().cloned().collect();
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
 
-    println!(
-        "Waiting for initialization acknowledgements from {} agent(s)...",
-        pending.len()
-    );
+        let remaining = deadline.saturating_duration_since(now);
 
-    while !pending.is_empty() {
         tokio::select! {
+            _ = tokio::time::sleep(remaining) => {
+                return false;
+            }
             Some(result) = reply_to_syncer_stream.next() => {
                 let Ok(sample) = result else { continue };
                 let Sample::Value(msg) = sample.into_value() else { continue };
-                if let Some(expected) = init_requests.get(&msg.agent_id) {
-                    if &msg.request_id == expected && matches!(msg.phase, AgentPhase::Initialized) {
-                        if pending.remove(&msg.agent_id) {
-                            println!("Agent {} acknowledged initialization.", msg.agent_id);
-                        }
-                    }
+                if msg.agent_id == agent_id
+                    && msg.request_id == request_id
+                    && matches!(msg.phase, AgentPhase::Initialized)
+                {
+                    return true;
                 }
             }
             Some(result) = agent_status_stream.next() => {
                 let Ok(sample) = result else { continue };
                 let Sample::Value(msg) = sample.into_value() else { continue };
-                if msg.phase == AgentPhase::Initialized {
-                    if pending.remove(&msg.agent_id) {
-                        println!("Agent {} reported Initialized status.", msg.agent_id);
-                    }
+                if msg.agent_id == agent_id && matches!(msg.phase, AgentPhase::Initialized) {
+                    return true;
                 }
             }
         }

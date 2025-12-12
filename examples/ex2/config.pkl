@@ -1,24 +1,46 @@
+// data.satellites: mode=["random"|"file"], random{count,lat_range,lon_range,speed}, file{path}
+// data.tasks: mode=["random"|"file"], random{count,lat_range,lon_range,score_range,duration_range,decay_rate_range}, file{path}
 data {
   satellites {
     mode = "random"
     random {
-        count = 2
+        count = 6
+        // lat_range/lon_range expect degrees*1e6 ints; speed in kmph
+        // lat_range = List(-90_000_000, 90_000_000)
+        // lon_range = List(-180_000_000, 180_000_000)
+        // speed = 28000
     }
+    // file { path = "examples/data/satellites.json" }
   }
 
   tasks {
     mode = "random"
     random {
         count = 20
+        // Lock non-spatial attributes; only position is randomized.
+        score_range = List(300.0, 300.0)
+        duration_range = List(300.0, 300.0)
+        decay_rate_range = List(0.5, 0.5)
+        // lat_range = List(-90_000_000, 90_000_000)
+        // lon_range = List(-180_000_000, 180_000_000)
     }
+    // file { path = "examples/data/tasks.json" }
   }
 }
 
+// dds: domain_id, handshake_timeout_ms, max_iterations, terminate_agents_on_convergence,
+//      init_broadcast_delay_ms, init_per_agent_delay_ms (all ms where applicable)
 dds {
   domain_id = 0
   max_iterations = 100
+  // handshake_timeout_ms = 5000
+  // terminate_agents_on_convergence = false
+  // init_broadcast_delay_ms = 300
+  // init_per_agent_delay_ms = 100
 }
 
+// viz: enabled, output_dir, file_name, image_size(List), enable_map, show_task_info,
+//      show_path_time, font_size, line_thickness
 viz {
   enabled = true
   enable_map = true
@@ -27,8 +49,11 @@ viz {
   image_size = List(1920, 960)
   font_size = 24.0
   line_thickness = 4
+  // output_dir = "visualizations"
+  // file_name = "viz.png"
 }
 
+// algo: method=["cbba"], cbba{max_tasks_per_agent (0 = unbounded)}
 algo {
   method = "cbba"
   cbba {
@@ -36,6 +61,7 @@ algo {
   }
 }
 
+// output_config: dir, use_timestamp, timestamp_fmt
 output_config {
   dir = "examples/ex2/results"
   use_timestamp = true

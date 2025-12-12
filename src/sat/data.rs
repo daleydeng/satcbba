@@ -1,6 +1,7 @@
 use super::types::{ExploreTask, Satellite};
 use crate::consensus::types::{AgentId, TaskId};
 use anyhow::{Context, Result};
+use rand::distr::uniform::SampleUniform;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -32,6 +33,18 @@ pub struct SatGenParams {
     pub speed: Option<u32>,
 }
 
+fn sample_or_fixed<T>(rng: &mut impl Rng, a: T, b: T) -> T
+where
+    T: SampleUniform + PartialOrd + Copy,
+{
+    let (low, high) = if a <= b { (a, b) } else { (b, a) };
+    if low == high {
+        low
+    } else {
+        rng.random_range(low..high)
+    }
+}
+
 pub fn generate_random_tasks(params: &TaskGenParams) -> Vec<ExploreTask> {
     let mut rng = rand::rng();
     let mut tasks = Vec::new();
@@ -45,11 +58,11 @@ pub fn generate_random_tasks(params: &TaskGenParams) -> Vec<ExploreTask> {
     for i in 1..=params.count {
         if let Ok(task) = ExploreTask::new(
             TaskId(i as u32),
-            rng.random_range(min_lat..max_lat),
-            rng.random_range(min_lon..max_lon),
-            rng.random_range(min_decay..max_decay),
-            rng.random_range(min_score..max_score),
-            rng.random_range(min_duration..max_duration), // Random execution duration between 1 and 10 minutes
+            sample_or_fixed(&mut rng, min_lat, max_lat),
+            sample_or_fixed(&mut rng, min_lon, max_lon),
+            sample_or_fixed(&mut rng, min_decay, max_decay),
+            sample_or_fixed(&mut rng, min_score, max_score),
+            sample_or_fixed(&mut rng, min_duration, max_duration),
             None,
         ) {
             tasks.push(task);
@@ -69,8 +82,8 @@ pub fn generate_random_satellites(params: &SatGenParams) -> Vec<Satellite> {
     for i in 1..=params.count {
         sats.push(Satellite {
             id: AgentId(i as u32),
-            lat_e6: rng.random_range(min_lat..max_lat),
-            lon_e6: rng.random_range(min_lon..max_lon),
+            lat_e6: sample_or_fixed(&mut rng, min_lat, max_lat),
+            lon_e6: sample_or_fixed(&mut rng, min_lon, max_lon),
             speed_kmph: speed,
         });
     }

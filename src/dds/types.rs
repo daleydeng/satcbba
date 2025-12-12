@@ -41,7 +41,9 @@ pub struct AgentCommand<T, M, S> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentCommandPayload<T, M, S> {
-    Initialization { state: Option<S> },
+    /// Handshake probe before full initialization
+    Handshake,
+    Initialization { state: S },
     /// Probe agents to confirm they are ready (have applied initialization)
     ReadyCheck,
     /// Optionally carries a set of tasks for bundle construction

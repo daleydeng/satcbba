@@ -14,7 +14,7 @@ use futures::StreamExt;
 use rustdds::with_key::Sample;
 use satcbba::CBBA;
 use satcbba::config::load_pkl;
-use satcbba::consensus::types::{AgentId, Task as TaskTrait};
+use satcbba::consensus::types::{Agent, AgentId, Task as TaskTrait};
 use satcbba::sat::score::SatelliteScoreFunction;
 use satcbba::sat::report::{
     AgentIterationLog, IterationLog, TaskReleaseRecord, build_report, write_report_json,
@@ -186,6 +186,11 @@ pub async fn run(
     .await?;
 
     // --- Broadcast per-agent CBBA state from syncer ---
+    // Allow discovery to settle before sending initialization payloads.
+    tokio::time::sleep(Duration::from_millis(
+        config.dds.init_broadcast_delay_ms,
+    ))
+    .await;
     let cbba_config = config.algo.cbba.clone();
     let mut init_requests: HashMap<AgentId, String> = HashMap::new();
     for agent_id in &ready_agents {
@@ -199,14 +204,26 @@ pub async fn run(
             initial_snapshots.push(cbba.clone());
             let init_request_id = format!("init-{}-{}", agent_id.0, Uuid::new_v4());
             let init_request_id_for_map = init_request_id.clone();
+            println!(
+                "Sending initialization to agent {} (state agent {}, tasks={})",
+                agent_id.0,
+                cbba.agent.id().0,
+                cbba.current_tasks.len()
+            );
             network_writer
                 .publish_syncer_request(AgentCommand {
                     request_id: init_request_id,
                     recipients: Some(vec![*agent_id]),
-                    payload: AgentCommandPayload::Initialization { state: Some(cbba) },
+                    payload: AgentCommandPayload::Initialization { state: cbba },
                 })
                 .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             init_requests.insert(*agent_id, init_request_id_for_map);
+
+            // Stagger init sends slightly to avoid bursts before all matches are ready.
+            tokio::time::sleep(Duration::from_millis(
+                config.dds.init_per_agent_delay_ms,
+            ))
+            .await;
         } else {
             println!(
                 "Warning: no satellite definition found for agent {}",
@@ -508,7 +525,7 @@ async fn run_handshake(
         .publish_syncer_request(AgentCommand {
             request_id: handshake_request_id.clone(),
             recipients: None,
-            payload: AgentCommandPayload::Initialization { state: None },
+            payload: AgentCommandPayload::Handshake,
         })
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
@@ -528,6 +545,12 @@ async fn run_handshake(
             Some(result) = reply_to_syncer_stream.next() => {
                 let Ok(sample) = result else { continue };
                 let Sample::Value(msg) = sample.into_value() else { continue };
+                println!(
+                    "Handshake observed AgentReply from {} req={} phase={:?}",
+                    msg.agent_id,
+                    msg.request_id,
+                    msg.phase
+                );
                 if msg.request_id == handshake_request_id {
                     if ready_agents.insert(msg.agent_id) {
                         println!(
@@ -539,7 +562,7 @@ async fn run_handshake(
                 } else {
                     let _ = ready_agents.insert(msg.agent_id);
                     println!(
-                        "Received reply for request {} during handshake; agent {} marked as present ({} discovered).",
+                        "Received non-handshake reply {} from agent {} during handshake ({} discovered).",
                         msg.request_id,
                         msg.agent_id,
                         ready_agents.len()
@@ -550,6 +573,11 @@ async fn run_handshake(
             Some(result) = agent_status_stream.next() => {
                 let Ok(sample) = result else { continue };
                 let Sample::Value(msg) = sample.into_value() else { continue };
+                println!(
+                    "Handshake observed AgentStatus from {} phase={:?}",
+                    msg.agent_id,
+                    msg.phase
+                );
                 if matches!(msg.phase, AgentPhase::Initialized | AgentPhase::Connected)
                     && ready_agents.insert(msg.agent_id)
                 {
@@ -570,7 +598,11 @@ async fn run_handshake(
             timeout
         );
     } else {
-        println!("Handshake complete: {} agent(s) ready.", ready_agents.len());
+        println!(
+            "Handshake complete: {} agent(s) ready -> {:?}.",
+            ready_agents.len(),
+            ready_agents
+        );
     }
 
     Ok(())

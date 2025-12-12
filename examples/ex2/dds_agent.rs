@@ -186,48 +186,51 @@ async fn handle_syncer_message(
     }
 
     match payload {
+        AgentCommandPayload::Handshake => {
+            ctx.reset();
+            info!("Agent {} handshake acknowledged", agent_id.0);
+            network_writer.publish_status(AgentPhase::Connected)?;
+            let reply = AgentReply {
+                request_id,
+                agent_id,
+                iteration: ctx.iteration,
+                phase: AgentPhase::Connected,
+            };
+            network_writer.publish_reply_to_syncer(reply)?;
+        }
         AgentCommandPayload::Initialization { state } => {
             ctx.reset();
-            match state {
-                Some(initial_state) => {
-                    // Agent id mismatch is a programming/config error; fail fast.
-                    assert_eq!(
-                        initial_state.agent.id, agent_id,
-                        "Initialization state sent to wrong agent: expected {:?}, got {:?}",
-                        agent_id, initial_state.agent.id
-                    );
+            info!(
+                "Agent {} received Initialization req {} targeting agent {}",
+                agent_id.0,
+                request_id,
+                state.agent.id.0
+            );
+            // Agent id mismatch is a programming/config error; fail fast.
+            assert_eq!(
+                state.agent.id, agent_id,
+                "Initialization state sent to wrong agent: expected {:?}, got {:?}",
+                agent_id, state.agent.id
+            );
 
-                    network_writer.publish_status(AgentPhase::Initializing)?;
-                    info!(
-                        "Initialized agent {} at pos ({}, {})",
-                        agent_id.0,
-                        initial_state.agent.lat_e6,
-                        initial_state.agent.lon_e6
-                    );
-                    ctx.cbba = Some(initial_state);
+            network_writer.publish_status(AgentPhase::Initializing)?;
+            info!(
+                "Initialized agent {} at pos ({}, {})",
+                agent_id.0,
+                state.agent.lat_e6,
+                state.agent.lon_e6
+            );
+            ctx.cbba = Some(state);
 
-                    network_writer.publish_status(AgentPhase::Initialized)?;
+            network_writer.publish_status(AgentPhase::Initialized)?;
 
-                    let reply = AgentReply {
-                        request_id,
-                        agent_id,
-                        iteration: ctx.iteration,
-                        phase: AgentPhase::Initialized,
-                    };
-                    network_writer.publish_reply_to_syncer(reply)?;
-                }
-                None => {
-                    // Handshake-only init; mark as connected without entering Initializing.
-                    network_writer.publish_status(AgentPhase::Connected)?;
-                    let reply = AgentReply {
-                        request_id,
-                        agent_id,
-                        iteration: ctx.iteration,
-                        phase: AgentPhase::Connected,
-                    };
-                    network_writer.publish_reply_to_syncer(reply)?;
-                }
-            }
+            let reply = AgentReply {
+                request_id,
+                agent_id,
+                iteration: ctx.iteration,
+                phase: AgentPhase::Initialized,
+            };
+            network_writer.publish_reply_to_syncer(reply)?;
         }
         AgentCommandPayload::BundlingConstruction { tasks } => {
             if !ensure_cbba_present(ctx, &request_id, agent_id, network_writer)? {

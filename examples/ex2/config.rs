@@ -10,6 +10,10 @@ pub struct DdsConfig {
     pub handshake_timeout_ms: u64,
     pub max_iterations: usize,
     pub terminate_agents_on_convergence: bool,
+    /// Delay before sending initialization commands (ms)
+    pub init_broadcast_delay_ms: u64,
+    /// Delay between per-agent initialization sends (ms)
+    pub init_per_agent_delay_ms: u64,
 }
 
 impl Default for DdsConfig {
@@ -19,6 +23,8 @@ impl Default for DdsConfig {
             handshake_timeout_ms: 5_000,
             max_iterations: 100,
             terminate_agents_on_convergence: false,
+            init_broadcast_delay_ms: 300,
+            init_per_agent_delay_ms: 100,
         }
     }
 }

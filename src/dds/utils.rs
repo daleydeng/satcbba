@@ -7,6 +7,7 @@ pub fn create_common_qos() -> QosPolicies {
             max_blocking_time: rustdds::Duration::from_millis(100),
         })
         .durability(Durability::TransientLocal)
+        .history(rustdds::policy::History::KeepAll)
         .build()
 }
 
